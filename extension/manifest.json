@@ -1,0 +1,117 @@
+{
+  "manifest_version": 3,
+  "name": "Draft Assistant Sync",
+  "version": "1.6.9",
+  "description": "Syncs your ESPN, Yahoo, and NFL.com fantasy football drafts into Draft Assistant.",
+  "action": {
+    "default_title": "Draft Assistant",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.cbssports.com/fantasy/football/rankings/*",
+        "https://www.rotowire.com/football/rankings.php*",
+        "https://www.rotowire.com/football/expert-rankings.php*"
+      ],
+      "js": [
+        "rankings-content.js"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://fantasy.espn.com/*",
+        "https://www.espn.com/fantasy/*",
+        "https://www.espn.com/ffl/*"
+      ],
+      "js": [
+        "espn-inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://fantasy.espn.com/*",
+        "https://www.espn.com/fantasy/*",
+        "https://www.espn.com/ffl/*"
+      ],
+      "js": [
+        "core.bundle.js",
+        "espn-suggest.js",
+        "espn-overlay.js",
+        "espn-content.js"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://football.fantasysports.yahoo.com/*",
+        "https://sports.yahoo.com/fantasy/*"
+      ],
+      "js": ["yahoo-inject.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://football.fantasysports.yahoo.com/*",
+        "https://sports.yahoo.com/fantasy/*"
+      ],
+      "js": ["yahoo-content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["https://fantasy.nfl.com/*"],
+      "js": ["nfl-inject.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://fantasy.nfl.com/*"],
+      "js": ["nfl-content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://draft-bice-omega.vercel.app/*"
+      ],
+      "js": [
+        "app-content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://fantasy.espn.com/*",
+    "https://lm-api-communication.fantasy.espn.com/*",
+    "https://lm-api-reads.fantasy.espn.com/*",
+    "https://www.espn.com/*",
+    "https://www.cbssports.com/*",
+    "https://www.rotowire.com/*",
+    "https://football.fantasysports.yahoo.com/*",
+    "https://sports.yahoo.com/*",
+    "https://fantasy.nfl.com/*",
+    "https://api.fantasy.nfl.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://draft-bice-omega.vercel.app/*"
+  ]
+}

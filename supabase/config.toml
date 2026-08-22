@@ -1,0 +1,30 @@
+project_id = "draft-assistant"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://127.0.0.1:5173", "http://localhost:4173"]
+
+[storage]
+enabled = true
+file_size_limit = "40MiB"
+
+[functions.scrape-rankings]
+verify_jwt = false
+
+[functions.sync-intelligence]
+verify_jwt = false

@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        width: 280px;
+        font: 13px/1.4 system-ui, sans-serif;
+        background: #0b111a;
+        color: #e8eef7;
+      }
+      main {
+        padding: 14px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+      p {
+        margin: 0 0 10px;
+        color: #8b9bb4;
+      }
+      .ok {
+        color: #3ee0a0;
+      }
+      .warn {
+        color: #f5c14a;
+      }
+      button {
+        width: 100%;
+        margin-top: 8px;
+        padding: 8px;
+        border: 0;
+        border-radius: 6px;
+        background: #3ee0a0;
+        color: #0b111a;
+        font-weight: 700;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Draft Assistant</h1>
+      <p id="status" class="warn">Looking for a fantasy draft tab…</p>
+  <button id="open-espn">Open ESPN Fantasy</button>
+  <button id="open-yahoo">Open Yahoo Fantasy</button>
+  <button id="open-nfl">Open NFL Fantasy</button>
+  <button id="open-app">Open Draft Assistant</button>
+  <button id="scrape-rankings">Scrape open rankings page</button>
+  <button id="scrape-all-rankings">Scrape all open rankings tabs</button>
+    </main>
+    <script src="app-hosts.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

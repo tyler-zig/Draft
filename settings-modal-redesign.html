@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Draft Assistant — Settings rebuild</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#0b1118;--panel:#111a22;--panel2:#16202a;--line:#243441;--soft:#1e2b36;
+      --ink:#eef4f8;--muted:#8ea0ab;--dim:#667b89;--chrome:#c3d0d9;
+      --green:#3ecf7a;--teal:#5bc4a4;--blue:#3d8bff;--amber:#f0a33a;--red:#ff6b5b;
+      --you:#12324d;--on:#fff;--header:#101a23;--body:#0e161d;--scrim:#02070bb8;
+    }
+    [data-theme="light"]{
+      color-scheme:light;
+      --bg:#edf2f6;--panel:#fff;--panel2:#e6edf3;--line:#c6d1da;--soft:#dbe3ea;
+      --ink:#17212b;--muted:#617181;--dim:#7e8c98;--chrome:#4a5b68;
+      --green:#188653;--teal:#167a68;--blue:#176fc1;--amber:#a9660e;--red:#c83b32;
+      --you:#d9ebfb;--on:#176fc1;--header:#f7fafc;--body:#eef3f7;--scrim:#26374780;
+    }
+    *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#42586a #0c141b}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:13px/1.35 Inter,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+    button,input,select{font:inherit;color:inherit}button{cursor:pointer}
+    .room{height:100vh;overflow:hidden;background:var(--bg)}
+    .room-bar{display:flex;align-items:center;gap:16px;height:60px;padding:0 20px;border-bottom:1px solid var(--line);background:#0d141b;opacity:.42;pointer-events:none}
+    [data-theme="light"] .room-bar{background:#fff}
+    .room-brand{font-size:19px;font-weight:700}.room-league{flex:1;text-align:center;color:#cdd8df}.room-clock{color:var(--green);font-weight:700;letter-spacing:.06em}
+    .room-body{display:grid;grid-template-columns:272px 1fr 336px;height:calc(100vh - 60px);opacity:.18;pointer-events:none}
+    .room-col{padding:16px;border-color:var(--line);border-style:solid;background:var(--panel)}.room-l{border-right-width:1px}.room-r{border-left-width:1px;background:var(--bg)}
+    .ghost{height:14px;margin:8px 0;border-radius:4px;background:var(--line)}.ghost.lg{height:36px}
+
+    .preview-bar{position:fixed;top:12px;left:12px;z-index:40;display:flex;align-items:center;gap:8px;padding:6px;border:1px solid var(--line);border-radius:9px;background:var(--panel);box-shadow:0 10px 28px #0006}
+    .preview-bar span{padding:0 8px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .preview-bar button{height:28px;padding:0 10px;border:1px solid transparent;border-radius:6px;background:none;color:var(--muted);font-size:11px;font-weight:700}
+    .preview-bar button.on{border-color:#2a4a63;background:#162433;color:var(--ink)}
+    [data-theme="light"] .preview-bar button.on{border-color:#9bb6cc;background:#dce9f4;color:#245b87}
+
+    .backdrop{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:28px;background:var(--scrim);backdrop-filter:blur(3px)}
+    .sheet{display:grid;width:min(960px,calc(100vw - 48px));height:min(740px,calc(100vh - 56px));grid-template-rows:auto auto minmax(0,1fr);overflow:hidden;border:1px solid #365064;border-radius:12px;background:var(--panel);box-shadow:0 28px 80px #000}
+    [data-theme="light"] .sheet{border-color:#9bb6cc;box-shadow:0 28px 80px #38506433}
+    .sheet>header{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px 14px;border-bottom:1px solid var(--line);background:var(--header)}
+    .eyebrow{color:var(--teal);font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase}
+    .sheet>header h1{margin:3px 0 0;font-size:22px;letter-spacing:-.03em}
+    .sheet>header p{margin:5px 0 0;color:var(--muted);font-size:12px}
+    .head-actions{display:flex;align-items:center;gap:8px}
+    .chip{display:inline-flex;align-items:center;height:26px;padding:0 8px;border:1px solid var(--line);border-radius:99px;background:var(--panel2);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .chip.live{border-color:#275d48;background:#163126;color:#b9ecd1}
+    [data-theme="light"] .chip.live{border-color:#90bca5;background:#def3e7;color:#185f3d}
+    .done{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--ink);font-size:11px;font-weight:700}
+    .done:hover{border-color:var(--blue);color:var(--on)}
+    .close{width:32px;height:32px;border:0;background:none;color:var(--muted);font-size:24px}.close:hover{color:var(--ink)}
+
+    .recipe{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--body)}
+    .stat{padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
+    .stat small{display:block;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .stat b{display:block;margin-top:3px;font-size:16px}
+    .stat em{display:block;margin-top:2px;color:var(--dim);font-size:10px;font-style:normal}
+    .stat.good b{color:var(--green)}
+
+    .body{display:grid;min-height:0;grid-template-columns:220px minmax(0,1fr)}
+    .nav{display:flex;min-height:0;flex-direction:column;padding:10px 8px;border-right:1px solid var(--line);background:var(--body)}
+    .nav button{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:10px;width:100%;padding:10px 10px;border:1px solid transparent;border-radius:8px;background:none;color:var(--muted);text-align:left}
+    .nav button:hover{background:var(--panel2);color:var(--ink)}
+    .nav button.on{border-color:#2a4a63;background:#162433;color:var(--ink)}
+    [data-theme="light"] .nav button.on{border-color:#9bb6cc;background:#dce9f4;color:#17212b}
+    .nav button b{font-size:12.5px;font-weight:650}
+    .nav button small{display:block;margin-top:2px;color:var(--dim);font-size:10px;font-weight:500}
+    .nav .count{color:var(--teal);font-size:10px;font-weight:700}
+    .nav .demo-only{display:none}
+    body.demo .nav .demo-only{display:grid}
+    .nav-foot{margin-top:auto;padding:8px 10px 6px;color:var(--dim);font-size:10.5px;line-height:1.4}
+
+    .pane-wrap{min-height:0;overflow:auto;padding:18px 20px 24px}
+    .pane{display:none;max-width:640px}.pane.show{display:block}
+    .pane h2{margin:0;font-size:18px;letter-spacing:-.02em}
+    .pane .lead{margin:6px 0 16px;color:var(--muted);font-size:12.5px;max-width:520px}
+
+    .card{padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+    .card+.card,.stack .card{margin-top:10px}
+    .card h3{margin:0;font-size:13px;font-weight:650}
+    .card p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+    .row.top{align-items:flex-start}
+
+    .themes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .theme{padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);text-align:left}
+    .theme:hover{border-color:var(--dim)}
+    .theme.on{border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
+    .swatch{height:54px;margin-bottom:9px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+    .swatch i{display:block;height:100%}
+    .swatch .dark{background:linear-gradient(90deg,#0b1118 42%,#111a22 42% 72%,#16202a 72%)}
+    .swatch .light{background:linear-gradient(90deg,#edf2f6 42%,#fff 42% 72%,#e6edf3 72%)}
+    .theme b{display:block;font-size:12.5px}.theme small{color:var(--muted);font-size:10.5px}
+
+    .toggle{display:flex;align-items:center;gap:10px;padding:0;border:0;background:none;color:inherit}
+    .switch{position:relative;width:36px;height:20px;flex:none;border-radius:99px;background:#33424e}
+    .switch:after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#e2ebf0;transition:transform .15s}
+    .toggle.on .switch{background:#1c6c4c}
+    .toggle.on .switch:after{transform:translateX(16px)}
+    [data-theme="light"] .switch{background:#9bb0bf}
+    [data-theme="light"] .toggle.on .switch{background:#188653}
+
+    .seg{display:grid;grid-template-columns:repeat(3,1fr);padding:3px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+    .seg.two{grid-template-columns:1fr 1fr}
+    .seg button{height:32px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:11px;font-weight:700}
+    .seg button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 4px #0005}
+    [data-theme="light"] .seg button.on{box-shadow:0 1px 4px #60738333}
+
+    .previews{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+    .previews button{display:grid;gap:2px;min-height:52px;padding:8px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel);text-align:left}
+    .previews button:hover{border-color:var(--dim)}
+    .previews b{font-size:12px}.previews small{color:var(--muted);font-size:10.5px}
+
+    .columns{display:grid;gap:6px}
+    .col{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:flex-start;gap:10px;padding:10px 11px;border:1px solid var(--line);border-radius:7px;background:var(--panel);cursor:pointer}
+    .col:hover{background:var(--header)}
+    .col input{margin-top:2px;accent-color:var(--blue)}
+    .col b{display:block;font-size:12.5px}
+    .col small{display:block;margin-top:2px;color:var(--muted);font-size:10.5px;line-height:1.4}
+    .col .lock{color:var(--dim);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .col.off{opacity:.55}
+
+    .field{display:grid;gap:5px}
+    .field span{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .field select,.field input[type=range]{height:34px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);outline:none}
+    .field select:focus{border-color:var(--blue);box-shadow:0 0 0 3px #3d8bff33}
+    .mock-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .range{grid-column:1/-1}
+    .range .scale{display:flex;justify-content:space-between;margin-top:4px;color:var(--dim);font-size:10px}
+    .range b{margin-left:auto;color:var(--chrome);font-variant-numeric:tabular-nums}
+    input[type=range]{width:100%;accent-color:var(--blue);padding:0}
+
+    .primary,.ghost-btn{height:36px;padding:0 14px;border-radius:7px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .primary{border:1px solid #2c8b62;background:#1c6c4c;color:#fff}
+    .primary:hover{background:#218056}
+    .ghost-btn{border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+    .ghost-btn:hover{border-color:var(--blue);color:var(--on)}
+    .wide{width:100%}
+    .actions{display:flex;gap:8px;margin-top:14px}
+
+    .keeper-stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+    .keeper-stat div{padding:10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);text-align:center}
+    .keeper-stat small{display:block;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .keeper-stat b{display:block;margin-top:3px;font-size:18px}
+
+    .rank-card{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+    .rank-card .dots{display:flex;gap:5px;margin-top:8px}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px #3ecf7a18}
+    .dot.off{background:#4a5b68;box-shadow:none}
+
+    .toast{position:fixed;right:22px;bottom:22px;z-index:40;padding:10px 14px;border:1px solid #3b6851;border-radius:7px;background:#14271f;color:#bcebd0;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+    .toast.show{opacity:1;transform:none}
+    @media(max-width:820px){
+      .body{grid-template-columns:1fr}
+      .nav{flex-direction:row;overflow:auto;border-right:0;border-bottom:1px solid var(--line)}
+      .nav button{min-width:140px}
+      .nav-foot,.nav button small{display:none}
+      .recipe{grid-template-columns:1fr 1fr}
+    }
+  </style>
+</head>
+<body>
+<div class="preview-bar" role="group" aria-label="Mockup league type">
+  <span>Preview</span>
+  <button type="button" id="modeEspn" class="on">Connected league</button>
+  <button type="button" id="modeDemo">Mock draft</button>
+</div>
+
+<div class="room" aria-hidden="true">
+  <div class="room-bar"><b class="room-brand">Draft Assistant</b><div class="room-league">The League · Round 5, Pick 52</div><div class="room-clock">YOUR PICK IN <b>0:48</b></div></div>
+  <div class="room-body"><div class="room-col room-l"><div class="ghost lg"></div><div class="ghost"></div><div class="ghost"></div><div class="ghost"></div></div><div></div><div class="room-col room-r"><div class="ghost lg"></div><div class="ghost"></div></div></div>
+</div>
+
+<div class="backdrop">
+  <section class="sheet" role="dialog" aria-modal="true" aria-label="Settings">
+    <header>
+      <div>
+        <div class="eyebrow" id="eyebrow">The League · ESPN</div>
+        <h1>Settings</h1>
+        <p id="subtitle">Appearance, sounds, and the player table for this draft room</p>
+      </div>
+      <div class="head-actions">
+        <span class="chip live" id="statusChip">Synced with ESPN</span>
+        <button type="button" class="done">Done</button>
+        <button type="button" class="close" aria-label="Close settings">×</button>
+      </div>
+    </header>
+
+    <div class="recipe">
+      <div class="stat"><small>Theme</small><b id="statTheme">Dark</b><em>Command center</em></div>
+      <div class="stat good" id="statSoundWrap"><small>Draft sounds</small><b id="statSounds">On</b><em>Pick tick + on the clock</em></div>
+      <div class="stat"><small>Table columns</small><b id="statCols">11</b><em id="statColsNote">All visible</em></div>
+      <div class="stat" id="statKeepWrap"><small>Keepers</small><b id="statKeep">6</b><em id="statKeepNote">Cost a round pick</em></div>
+    </div>
+
+    <div class="body">
+      <aside class="nav">
+        <button type="button" class="on" data-pane="appearance"><span>◐</span><span><b>Appearance</b><small>Theme and rankings</small></span></button>
+        <button type="button" data-pane="sounds"><span>♪</span><span><b>Sounds</b><small>Pick and clock cues</small></span></button>
+        <button type="button" data-pane="board"><span>☰</span><span><b>Player table</b><small>Visible columns</small></span><span class="count" id="navCols">11</span></button>
+        <button type="button" data-pane="keepers"><span>★</span><span><b>Keepers</b><small>Roster cost</small></span><span class="count">6</span></button>
+        <button type="button" class="demo-only" data-pane="mock"><span>▸</span><span><b>Mock draft</b><small>Room, scoring, speed</small></span></button>
+        <p class="nav-foot">Rankings sources live in the Rankings sheet. This modal only controls the room around the board.</p>
+      </aside>
+
+      <div class="pane-wrap">
+        <section class="pane show" id="appearance">
+          <h2>Appearance</h2>
+          <p class="lead">Theme applies to the draft room and player intelligence. Rankings stay on their own sheet so this list does not fight that recipe.</p>
+          <div class="themes">
+            <button type="button" class="theme on" data-theme="dark"><div class="swatch"><i class="dark"></i></div><b>Dark</b><small>Default for live drafts</small></button>
+            <button type="button" class="theme" data-theme="light"><div class="swatch"><i class="light"></i></div><b>Light</b><small>Higher contrast in daylight</small></button>
+          </div>
+          <div class="card">
+            <div class="rank-card">
+              <div>
+                <h3>Consensus rankings</h3>
+                <p>Median of 5 enabled sources · PPR from this league. Toggle sources and math in Rankings, not here.</p>
+                <div class="dots" aria-hidden="true"><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot off"></i></div>
+              </div>
+              <button type="button" class="ghost-btn" id="openRankings">Open rankings</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" id="sounds">
+          <h2>Draft sounds</h2>
+          <p class="lead">A tick on every pick, and a cue when you are on the clock. Browsers wait for a click on this page before audio can play.</p>
+          <div class="card">
+            <div class="row">
+              <div>
+                <h3>Play draft sounds</h3>
+                <p>Mute from the top bar or from this switch. The setting is saved to this browser.</p>
+              </div>
+              <button type="button" class="toggle on" id="soundToggle" aria-pressed="true" aria-label="Draft sounds"><i class="switch"></i></button>
+            </div>
+            <div class="previews">
+              <button type="button" data-toast="Previewing pick tick"><b>Preview pick</b><small>Soft tick when any team selects</small></button>
+              <button type="button" data-toast="Previewing on-the-clock cue"><b>Preview on the clock</b><small>Alert when it is your turn</small></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" id="board">
+          <h2>Player table</h2>
+          <p class="lead">Choose the columns on the available-player board. Player is always shown. Hints match the live table tooltips.</p>
+          <div class="columns" id="columns"></div>
+        </section>
+
+        <section class="pane" id="keepers">
+          <h2>Keepers</h2>
+          <p class="lead">Kept players stay off the available board. Whether they also consume a draft slot is a league rule, not a provider setting.</p>
+          <div class="keeper-stat">
+            <div><small>Kept</small><b>6</b></div>
+            <div><small>Teams</small><b>12</b></div>
+            <div><small>Allowed</small><b>2</b></div>
+          </div>
+          <div class="card">
+            <div class="row top">
+              <div>
+                <h3>Keepers cost a round pick</h3>
+                <p>On: the kept round is skipped on the board. Off: kept players start on the roster and every team still picks each round.</p>
+              </div>
+              <button type="button" class="toggle on" id="keeperToggle" aria-pressed="true" aria-label="Keepers cost a round pick"><i class="switch"></i></button>
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="primary" data-toast="Would open the keepers sheet">Set keepers</button>
+            <button type="button" class="ghost-btn" data-toast="ESPN allows 2 keepers per team">League rule</button>
+          </div>
+        </section>
+
+        <section class="pane" id="mock">
+          <h2>Mock draft</h2>
+          <p class="lead">Simulates the other teams with the survival spread model. A reachy room grabs anyone; a disciplined one sticks to the board. Kickers and defenses wait for the last round.</p>
+          <div class="card stack">
+            <div class="mock-grid">
+              <label class="field"><span>Teams</span>
+                <select id="mockTeams"><option>8 teams</option><option selected>12 teams</option><option>14 teams</option><option>16 teams</option></select>
+              </label>
+              <label class="field"><span>Rounds</span>
+                <select><option>10 rounds</option><option selected>15 rounds</option><option>16 rounds</option></select>
+              </label>
+              <label class="field"><span>Your slot</span>
+                <select id="mockSlot"><option>Slot 1</option><option>Slot 2</option><option>Slot 3</option><option selected>Slot 4</option><option>Slot 5</option><option>Slot 6</option></select>
+              </label>
+              <label class="field"><span>Scoring</span>
+                <select><option selected>PPR</option><option>Half PPR</option><option>Standard</option></select>
+              </label>
+              <label class="field range"><span>Reach <b id="reachVal">25%</b></span>
+                <input id="reach" type="range" min="0" max="100" step="5" value="25">
+                <div class="scale"><span>Disciplined</span><span>Reachy</span></div>
+              </label>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Speed</h3>
+            <p>How fast the other seats pick. Your clock still waits on you unless auto-draft is on.</p>
+            <div class="seg" id="speed" style="margin-top:10px">
+              <button type="button">Slow</button>
+              <button type="button" class="on">Normal</button>
+              <button type="button">Fast</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div>
+                <h3>Auto-draft my picks</h3>
+                <p>Takes the top queued player, or best available if the queue is empty.</p>
+              </div>
+              <button type="button" class="toggle" id="autoToggle" aria-pressed="false" aria-label="Auto-draft my picks"><i class="switch"></i></button>
+            </div>
+          </div>
+          <p class="lead" style="margin:14px 0 0">The grades sheet opens when the mock finishes. Keepers stay off the board.</p>
+          <div class="actions">
+            <button type="button" class="primary wide" data-toast="Would start a new 12-team PPR mock">Start new mock</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const columns = [
+  { key: "rank", label: "Rank", hint: "Consensus rank from the enabled recipe." },
+  { key: "player", label: "Player", required: true, hint: "Name, team, and photo. Always shown." },
+  { key: "position", label: "Pos", hint: "QB, RB, WR, TE, K, DST." },
+  { key: "team", label: "Team", hint: "NFL team abbreviation." },
+  { key: "tier", label: "Tier", hint: "Breaks in the consensus board." },
+  { key: "adp", label: "ADP", hint: "Season-long average draft position." },
+  { key: "liveAdp", label: "Live ADP", hint: "Live ADP for this league size, refreshed hourly. Blank when the player is not on that board." },
+  { key: "projection", label: "Proj", hint: "RotoWire season projection via Sleeper, scored to this league." },
+  { key: "vorp", label: "VORP", hint: "Points above a replacement-level player at the same position." },
+  { key: "value", label: "Value", hint: "Current pick minus ADP. Positive means the player has fallen." },
+  { key: "sos", label: "SoS", hint: "Playoff-week matchup rank. 1 = easiest slate in the window." },
+];
+const on = new Set(columns.map((c) => c.key));
+const toastEl = document.querySelector("#toast");
+let toastTimer;
+
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1600);
+}
+
+function renderColumns() {
+  document.querySelector("#columns").innerHTML = columns.map((c) => `
+    <label class="col ${on.has(c.key) ? "" : "off"}">
+      <input type="checkbox" data-col="${c.key}" ${on.has(c.key) ? "checked" : ""} ${c.required ? "disabled" : ""}>
+      <span><b>${c.label}</b><small>${c.hint}</small></span>
+      ${c.required ? '<span class="lock">Required</span>' : ""}
+    </label>
+  `).join("");
+  const n = on.size;
+  document.querySelector("#statCols").textContent = n;
+  document.querySelector("#navCols").textContent = n;
+  document.querySelector("#statColsNote").textContent = n === columns.length ? "All visible" : `${columns.length - n} hidden`;
+}
+
+function setPane(id) {
+  document.querySelectorAll(".nav button[data-pane]").forEach((b) => b.classList.toggle("on", b.dataset.pane === id));
+  document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("show", p.id === id));
+}
+
+function setDemo(demo) {
+  document.body.classList.toggle("demo", demo);
+  document.querySelector("#modeDemo").classList.toggle("on", demo);
+  document.querySelector("#modeEspn").classList.toggle("on", !demo);
+  document.querySelector("#eyebrow").textContent = demo ? "Practice room · Mock" : "The League · ESPN";
+  document.querySelector("#subtitle").textContent = demo
+    ? "Set the room, then start a new mock. Grades open when it finishes."
+    : "Appearance, sounds, and the player table for this draft room";
+  document.querySelector("#statusChip").textContent = demo ? "Local mock" : "Synced with ESPN";
+  document.querySelector("#statusChip").classList.toggle("live", !demo);
+  const mockNav = document.querySelector('[data-pane="mock"]');
+  if (demo) setPane("mock");
+  else if (mockNav.classList.contains("on")) setPane("appearance");
+}
+
+document.querySelectorAll(".nav button[data-pane]").forEach((b) => b.addEventListener("click", () => setPane(b.dataset.pane)));
+document.querySelector("#modeDemo").onclick = () => setDemo(true);
+document.querySelector("#modeEspn").onclick = () => setDemo(false);
+
+document.querySelectorAll(".theme").forEach((btn) => btn.addEventListener("click", () => {
+  document.querySelectorAll(".theme").forEach((x) => x.classList.remove("on"));
+  btn.classList.add("on");
+  document.documentElement.dataset.theme = btn.dataset.theme;
+  document.querySelector("#statTheme").textContent = btn.dataset.theme === "light" ? "Light" : "Dark";
+}));
+
+document.querySelector("#soundToggle").onclick = function () {
+  this.classList.toggle("on");
+  const onNow = this.classList.contains("on");
+  this.setAttribute("aria-pressed", String(onNow));
+  document.querySelector("#statSounds").textContent = onNow ? "On" : "Muted";
+  document.querySelector("#statSoundWrap").classList.toggle("good", onNow);
+};
+
+document.querySelector("#keeperToggle").onclick = function () {
+  this.classList.toggle("on");
+  const onNow = this.classList.contains("on");
+  this.setAttribute("aria-pressed", String(onNow));
+  document.querySelector("#statKeepNote").textContent = onNow ? "Cost a round pick" : "Roster only, no slot";
+};
+
+document.querySelector("#autoToggle").onclick = function () {
+  this.classList.toggle("on");
+  this.setAttribute("aria-pressed", String(this.classList.contains("on")));
+};
+
+document.querySelector("#columns").addEventListener("change", (e) => {
+  const key = e.target.dataset.col;
+  if (!key || columns.find((c) => c.key === key)?.required) return;
+  e.target.checked ? on.add(key) : on.delete(key);
+  renderColumns();
+});
+
+document.querySelector("#speed").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  document.querySelectorAll("#speed button").forEach((x) => x.classList.remove("on"));
+  btn.classList.add("on");
+});
+
+document.querySelector("#reach").oninput = (e) => {
+  document.querySelector("#reachVal").textContent = `${e.target.value}%`;
+};
+
+document.querySelector("#openRankings").onclick = () => toast("Would open the Rankings sheet");
+document.querySelectorAll("[data-toast]").forEach((btn) => btn.addEventListener("click", () => toast(btn.dataset.toast)));
+document.querySelector(".done").onclick = () => toast("Would close settings");
+document.querySelector(".close").onclick = () => toast("Would close settings");
+
+renderColumns();
+</script>
+</body>
+</html>

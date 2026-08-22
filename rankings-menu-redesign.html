@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Draft Assistant — Rankings menu redesign</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1118;--panel:#111a22;--panel2:#16202a;--line:#243441;--soft:#1e2b36;--ink:#eef4f8;--muted:#8ea0ab;--dim:#667b89;--green:#3ecf7a;--teal:#5bc4a4;--blue:#3d8bff;--amber:#f0a33a;--red:#ff6b5b}
+    *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#42586a #0c141b}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:13px/1.35 Inter,"Segoe UI",system-ui,sans-serif}
+    button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}
+    .room{height:100vh;overflow:hidden;background:#0b1118}
+    .room-bar{display:flex;align-items:center;gap:16px;height:60px;padding:0 20px;border-bottom:1px solid var(--line);background:#0d141b;opacity:.42;pointer-events:none}
+    .room-brand{font-size:19px;font-weight:700}.room-league{flex:1;text-align:center;color:#cdd8df}.room-clock{color:var(--green);font-weight:700;letter-spacing:.06em}
+    .room-body{display:grid;grid-template-columns:272px 1fr 336px;height:calc(100vh - 60px);opacity:.18;pointer-events:none}
+    .room-col{padding:16px;border-color:var(--line);border-style:solid;background:var(--panel)}.room-l{border-right-width:1px}.room-r{border-left-width:1px;background:var(--bg)}.ghost{height:14px;margin:8px 0;border-radius:4px;background:#243441}.ghost.lg{height:36px}
+
+    .backdrop{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:28px;background:#02070bb8;backdrop-filter:blur(3px)}
+    .sheet{display:grid;width:min(1120px,calc(100vw - 48px));height:min(780px,calc(100vh - 56px));grid-template-rows:auto auto minmax(0,1fr);overflow:hidden;border:1px solid #365064;border-radius:12px;background:var(--panel);box-shadow:0 28px 80px #000}
+    .sheet>header{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px 14px;border-bottom:1px solid var(--line);background:#101a23}
+    .eyebrow{color:var(--teal);font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase}
+    .sheet>header h1{margin:3px 0 0;font-size:22px;letter-spacing:-.03em}
+    .sheet>header p{margin:5px 0 0;color:var(--muted);font-size:12px}
+    .head-actions{display:flex;align-items:center;gap:8px}
+    .close{width:32px;height:32px;border:0;background:none;color:var(--muted);font-size:24px}.close:hover{color:var(--ink)}
+    .chip{display:inline-flex;align-items:center;height:26px;padding:0 8px;border:1px solid var(--line);border-radius:99px;background:var(--panel2);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .chip.live{border-color:#275d48;background:#163126;color:#b9ecd1}
+
+    .recipe{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:#0e161d}
+    .stat{padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
+    .stat small{display:block;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .stat b{display:block;margin-top:3px;font-size:16px}
+    .stat em{display:block;margin-top:2px;color:var(--dim);font-size:10px;font-style:normal}
+    .stat.good b{color:var(--green)}.stat.warn b{color:var(--amber)}
+
+    .body{display:grid;min-height:0;grid-template-columns:300px minmax(0,1fr)}
+    .menu{display:flex;min-height:0;flex-direction:column;border-right:1px solid var(--line);background:#0e161d}
+    .menu-pad{padding:14px 14px 8px}
+    .field{display:grid;gap:5px;margin-bottom:10px}
+    .field span{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .field select{height:34px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);outline:none}
+    .field select:focus{border-color:#3b6689}
+    .note{margin:0 0 4px;color:var(--dim);font-size:10.5px;line-height:1.4}
+
+    .menu-head{display:flex;align-items:center;justify-content:space-between;padding:4px 14px 8px}
+    .menu-head b{font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+    .menu-head span{color:var(--teal);font-size:11px;font-weight:700}
+    .sources{min-height:0;flex:1;overflow:auto;padding:0 8px 8px}
+    .source{display:grid;width:100%;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 8px;border:1px solid transparent;border-radius:8px;background:none;text-align:left}
+    .source:hover{background:var(--panel2)}
+    .source.on{border-color:#2a4a63;background:#162433}
+    .source small{display:block;overflow:hidden;color:var(--muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px #3ecf7a18}
+    .dot.stale{background:var(--amber);box-shadow:0 0 0 3px #f0a33a18}
+    .dot.off{background:#4a5b68;box-shadow:none}
+    .source input{accent-color:var(--blue)}
+    .add{margin:4px 14px 14px;height:36px;border:1px dashed #3a5366;border-radius:7px;background:none;color:#b9d8f4;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .add:hover,.add.on{border-style:solid;border-color:var(--blue);background:#132334}
+
+    .editor{min-height:0;overflow:auto;padding:16px 18px 20px}
+    .panel{display:none}.panel.show{display:block}
+    .editor-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+    .editor-top h2{margin:3px 0 0;font-size:18px}
+    .editor-top p{margin:5px 0 0;color:var(--muted);font-size:12px;max-width:460px}
+    .seg{display:grid;grid-template-columns:1fr 1fr;padding:3px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+    .seg button{height:34px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase}
+    .seg button.active{background:var(--panel2);color:var(--ink)}
+
+    .card{padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+    .card p{margin:6px 0 0;color:var(--muted);font-size:12px}
+    .primary,.ghost-btn,.danger{height:34px;padding:0 12px;border-radius:6px;font-size:11px;font-weight:700}
+    .primary{border:1px solid #2c8b62;background:#1c6c4c;color:#fff}
+    .primary:disabled{opacity:.45;cursor:not-allowed}
+    .ghost-btn{border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+    .danger{border:1px solid #5a2d2d;background:#2a1516;color:#ffaaa2}
+    .wide{width:100%;margin-top:12px}
+
+    .tools{display:flex;align-items:center;gap:8px;margin:12px 0}
+    .search{display:flex;flex:1;align-items:center;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+    .search input{width:100%;border:0;background:none;outline:none}
+    .tools>span{color:var(--muted);font-size:11px;white-space:nowrap}
+    .list{display:grid;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+    .list label{display:grid;grid-template-columns:18px minmax(0,1fr) 92px;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--soft);cursor:pointer}
+    .list label:last-child{border-bottom:0}.list label:hover{background:var(--panel2)}
+    .list b{display:block;font-size:12px}.list small{color:var(--muted);font-size:10px}
+    .list time{color:var(--dim);font-size:10px;text-align:right}
+    .list input{accent-color:var(--blue)}
+
+    .warn{margin:12px 0 0;padding:9px 11px;border:1px solid #705426;border-radius:6px;background:#342a17;color:#f2cd81;font-size:11.5px}
+    .ok{margin:12px 0 0;padding:8px 10px;border-radius:5px;background:#153c2c;color:#82d9ad;font-size:11px}
+
+    .drop{display:grid;place-items:center;min-height:120px;padding:18px;border:1px dashed #3a5366;border-radius:8px;background:#0e161d;text-align:center;color:var(--muted)}
+    .drop b{display:block;margin-bottom:4px;color:var(--ink)}
+    .paste{width:100%;height:92px;margin-top:10px;padding:9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:11px}
+    .row-actions{display:flex;gap:8px;margin-top:10px}
+
+    .collect-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px}
+    .collect-grid label{display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);cursor:pointer}
+    .collect-grid label.on{border-color:#2a4a63;background:#162433}
+    .collect-grid b{display:block;font-size:12px}.collect-grid small{color:var(--muted);font-size:10px}
+    .log{margin:10px 0 0;max-height:120px;overflow:auto;padding:8px 10px;border-radius:6px;background:var(--bg);color:var(--muted);font:11px/1.5 ui-monospace,Consolas,monospace}
+
+    .preview{margin-top:16px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    .preview header{display:flex;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--soft);background:#0e161d}
+    .preview header span{color:var(--muted);font-size:10px;text-transform:uppercase}
+    table{width:100%;border-collapse:collapse}th{padding:7px 10px;color:var(--dim);font-size:9px;text-align:left;text-transform:uppercase}td{padding:8px 10px;border-top:1px solid var(--soft)}
+    .pos{display:inline-grid;min-width:28px;height:18px;place-items:center;border-radius:4px;color:#fff;font-size:9px;font-weight:700}
+    .RB{background:#2f8f4e}.WR{background:#2d6cb5}.TE{background:#c47a22}.QB{background:#7a4fd1}
+    .toast{position:fixed;right:22px;bottom:22px;z-index:40;padding:10px 14px;border:1px solid #3b6851;border-radius:7px;background:#14271f;color:#bcebd0;opacity:0;transform:translateY(8px);transition:.2s}
+    .toast.show{opacity:1;transform:none}
+    @media(max-width:980px){.body{grid-template-columns:1fr}.menu{border-right:0;border-bottom:1px solid var(--line)}.recipe{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+<div class="room" aria-hidden="true">
+  <div class="room-bar"><b class="room-brand">Draft Assistant</b><div class="room-league">The League · Round 5, Pick 52</div><div class="room-clock">YOUR PICK IN <b>0:48</b></div></div>
+  <div class="room-body"><div class="room-col room-l"><div class="ghost lg"></div><div class="ghost"></div><div class="ghost"></div><div class="ghost"></div></div><div></div><div class="room-col room-r"><div class="ghost lg"></div><div class="ghost"></div></div></div>
+</div>
+
+<div class="backdrop">
+  <section class="sheet" role="dialog" aria-modal="true" aria-label="Rankings">
+    <header>
+      <div>
+        <div class="eyebrow">Draft settings</div>
+        <h1>Rankings</h1>
+        <p id="subtitle">Median of 5 enabled sources · PPR detected from your league</p>
+      </div>
+      <div class="head-actions">
+        <span class="chip live" id="statusChip">Live on the board</span>
+        <button type="button" class="close" aria-label="Close rankings">×</button>
+      </div>
+    </header>
+
+    <div class="recipe">
+      <div class="stat"><small>Scoring</small><b id="statScoring">PPR</b><em id="statScoringNote">Detected from The League</em></div>
+      <div class="stat"><small>Combine</small><b id="statMethod">Median</b><em>of enabled lists</em></div>
+      <div class="stat good"><small>Driving the table</small><b id="statCount">5</b><em id="statMix">FantasyPros + 4 more</em></div>
+      <div class="stat" id="statFreshWrap"><small>Oldest board</small><b id="statFresh">8m</b><em>FantasyPros experts</em></div>
+    </div>
+
+    <div class="body">
+      <aside class="menu">
+        <div class="menu-pad">
+          <label class="field"><span>Format</span>
+            <select id="scoring" aria-label="Scoring format">
+              <option value="ppr">PPR — detected</option>
+              <option value="half">Half PPR</option>
+              <option value="standard">Standard</option>
+            </select>
+          </label>
+          <label class="field"><span>Consensus math</span>
+            <select id="method" aria-label="Consensus calculation">
+              <option value="median">Median of enabled lists</option>
+              <option value="mean">Mean of enabled lists</option>
+            </select>
+          </label>
+          <p class="note">The player table uses this recipe immediately. Expert swaps still need Apply.</p>
+        </div>
+        <div class="menu-head"><b>Active recipe</b><span id="enabledCount">5 on</span></div>
+        <div class="sources" id="sourceList"></div>
+        <button type="button" class="add" id="addBtn" data-id="add">+ Import or collect</button>
+      </aside>
+
+      <div class="editor">
+        <section class="panel show" id="panel-fp">
+          <div class="editor-top">
+            <div>
+              <div class="eyebrow">Primary source</div>
+              <h2>FantasyPros</h2>
+              <p>Use the published ECR board, or replace it with the individual expert boards you trust.</p>
+            </div>
+            <div class="seg" aria-label="FantasyPros source mode">
+              <button type="button" id="modeConsensus">Consensus</button>
+              <button type="button" id="modeExperts" class="active">Individual experts</button>
+            </div>
+          </div>
+          <div id="fpConsensus" hidden>
+            <div class="card">
+              <b>FantasyPros consensus</b>
+              <p>One ECR board for the selected format. Individual expert boards drop out of the recipe when this is applied.</p>
+              <button type="button" class="primary" style="margin-top:12px" id="useConsensus">Use consensus</button>
+            </div>
+          </div>
+          <div id="fpExperts">
+            <div class="tools">
+              <label class="search"><input id="expertQuery" placeholder="Search experts or outlets…" aria-label="Search experts"></label>
+              <span id="expertSelected">4 selected</span>
+              <button type="button" class="ghost-btn" id="selectAll">Select all</button>
+              <button type="button" class="ghost-btn" id="clearExperts">Clear</button>
+            </div>
+            <div class="list" id="expertList"></div>
+            <button type="button" class="primary wide" id="useExperts">Use 4 selected experts</button>
+          </div>
+          <p class="warn">Your league pays TE 1.5 per reception. No published board is built for that, so these ranks understate TE.</p>
+          <p class="ok" id="notice" hidden></p>
+        </section>
+
+        <section class="panel" id="panel-detail">
+          <div class="editor-top">
+            <div>
+              <div class="eyebrow">Enabled source</div>
+              <h2 id="detailTitle">Sleeper ADP</h2>
+              <p id="detailCopy">ADP from your provider, matched to the player directory. Toggle it from the recipe without leaving this sheet.</p>
+            </div>
+            <span class="chip" id="detailChip">312 matched</span>
+          </div>
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+              <div>
+                <b id="detailMeta">Last synced 8 minutes ago</b>
+                <p id="detailNote">Stays in the median until you uncheck it in the recipe.</p>
+              </div>
+              <button type="button" class="ghost-btn" id="detailToggle">Disable</button>
+            </div>
+          </div>
+          <div class="preview">
+            <header><b>Top of this board</b><span>sample</span></header>
+            <table>
+              <thead><tr><th>Rank</th><th>Player</th><th>Pos</th></tr></thead>
+              <tbody id="detailRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-add">
+          <div class="editor-top">
+            <div>
+              <div class="eyebrow">Library</div>
+              <h2>Import or collect</h2>
+              <p>Bring in a list you own, or refresh the public collector. New sets land in the recipe off until you enable them.</p>
+            </div>
+          </div>
+          <div class="drop"><b>Drop CSV or JSON</b>Rank, player, position, team. No logins or paywalls are bypassed.</div>
+          <div class="row-actions">
+            <button type="button" class="primary">Import file</button>
+            <button type="button" class="ghost-btn" id="togglePaste">Paste table</button>
+          </div>
+          <div id="pasteBox" hidden>
+            <input id="pasteLabel" value="CBS Sports PPR" style="width:100%;height:34px;margin-top:10px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg)">
+            <textarea class="paste" placeholder="Rank&#9;Player&#9;Pos&#9;Team"></textarea>
+            <button type="button" class="primary" style="margin-top:8px">Add to recipe</button>
+          </div>
+
+          <div style="margin:22px 0 10px" class="eyebrow">Rankings collector</div>
+          <div class="collect-grid">
+            <label class="on"><input type="checkbox" checked><span><b>FantasyPros</b><small>ECR + experts</small></span></label>
+            <label class="on"><input type="checkbox" checked><span><b>RotoWire</b><small>Format boards</small></span></label>
+            <label class="on"><input type="checkbox" checked><span><b>ESPN</b><small>Draft ranks</small></span></label>
+          </div>
+          <div class="row-actions">
+            <button type="button" class="primary">Collect now</button>
+            <button type="button" class="ghost-btn">Load into recipe</button>
+            <span style="align-self:center;color:var(--muted);font-size:11px">Last snapshot 8m · 18 boards · 624 players</span>
+          </div>
+          <pre class="log">08:14 FantasyPros PPR consensus · 312 rows
+08:14 ESPN draft ranks · 300 rows
+08:13 RotoWire PPR · 298 rows
+Idle. Next scheduled sweep in 5h 46m.</pre>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast">Recipe updated on the player table</div>
+
+<script>
+const experts = [
+  ['mike-clay', 'Mike Clay', 'ESPN', 312, 'Aug 22, 12:04 AM', true],
+  ['field-yates', 'Field Yates', 'ESPN', 300, 'Aug 21, 9:18 PM', true],
+  ['pat-fitz', 'Pat Fitzmaurice', 'FantasyPros', 318, 'Aug 21, 6:40 PM', true],
+  ['derek-brown', 'Derek Brown', 'FantasyPros', 305, 'Aug 21, 4:12 PM', true],
+  ['jake-ciely', 'Jake Ciely', 'The Athletic', 298, 'Aug 21, 2:55 PM', false],
+  ['andy-behrens', 'Andy Behrens', 'Yahoo', 289, 'Aug 21, 1:08 PM', false],
+  ['chris-harris', 'Chris Harris', 'FFToday', 276, 'Aug 20, 11:22 PM', false],
+  ['justin-boone', 'Justin Boone', 'theScore', 320, 'Aug 20, 8:04 PM', false],
+]
+const sources = [
+  {id:'fp', name:'FantasyPros', detail:'4 expert boards · 312 matched', fresh:'live', enabled:true, kind:'fp',
+    title:'FantasyPros', copy:'Replace consensus with the expert boards you want in the median.', chip:'4 experts', meta:'Oldest board synced 8 minutes ago', note:'Applying experts replaces the FantasyPros consensus slot.',
+    sample:[['2','Bijan Robinson','RB'],['3','Ja’Marr Chase','WR'],['5','Justin Jefferson','WR']]},
+  {id:'sleeper', name:'Sleeper ADP', detail:'PPR · 312 matched', fresh:'live', enabled:true, kind:'detail',
+    title:'Sleeper ADP', copy:'ADP from the connected league, matched to the player directory.', chip:'312 matched', meta:'Last synced 8 minutes ago', note:'Stays in the median until you uncheck it in the recipe.',
+    sample:[['3.1','Bijan Robinson','RB'],['1.4','Ja’Marr Chase','WR'],['3.8','Justin Jefferson','WR']]},
+  {id:'espn', name:'ESPN draft rank', detail:'PPR · 300 matched', fresh:'live', enabled:true, kind:'detail',
+    title:'ESPN draft rank', copy:'Published ESPN ranks for the selected scoring format.', chip:'300 matched', meta:'Collected 8 minutes ago', note:'Useful as a market check against expert boards.',
+    sample:[['4','Bijan Robinson','RB'],['2','Ja’Marr Chase','WR'],['3','Justin Jefferson','WR']]},
+  {id:'cbs', name:'CBS Sports PPR', detail:'Imported · 298 matched', fresh:'stale', enabled:true, kind:'detail',
+    title:'CBS Sports PPR', copy:'Pasted table imported locally. Remove it if you no longer want it in consensus.', chip:'298 matched', meta:'Imported yesterday · 4 unmatched names', note:'Imported lists are stored on this device until you remove them.',
+    sample:[['1','Ja’Marr Chase','WR'],['2','Bijan Robinson','RB'],['6','CeeDee Lamb','WR']], imported:true},
+  {id:'roto', name:'RotoWire PPR', detail:'Collected · 298 matched', fresh:'off', enabled:false, kind:'detail',
+    title:'RotoWire PPR', copy:'Collected board sitting in the library. Enable it to fold it into the median.', chip:'298 matched', meta:'Collected 8 minutes ago · currently off', note:'Off sources do not affect the player table.',
+    sample:[['2','Ja’Marr Chase','WR'],['4','Bijan Robinson','RB'],['5','Jahmyr Gibbs','RB']]},
+]
+let selected = 'fp', fpMode = 'experts', scoring = 'ppr', method = 'median'
+const labels = {ppr:'PPR', half:'Half PPR', standard:'Standard'}
+const scoringNotes = {ppr:'Detected from The League', half:'Manual scoring override', standard:'Manual scoring override'}
+
+function selectedExperts(){return experts.filter(e=>e[5])}
+function enabledSources(){return sources.filter(s=>s.enabled)}
+function toast(text){const n=document.querySelector('#toast');n.textContent=text;n.classList.add('show');setTimeout(()=>n.classList.remove('show'),1400)}
+
+function renderSources(){
+  document.querySelector('#sourceList').innerHTML = sources.map(s => `
+    <button type="button" class="source ${selected===s.id?'on':''}" data-id="${s.id}">
+      <input type="checkbox" ${s.enabled?'checked':''} data-toggle="${s.id}" aria-label="Enable ${s.name}">
+      <span><b>${s.name}</b><small>${s.detail}</small></span>
+      <i class="dot ${s.enabled ? s.fresh : 'off'}"></i>
+    </button>`).join('')
+  document.querySelector('#addBtn').classList.toggle('on', selected==='add')
+}
+
+function renderExperts(){
+  const q = document.querySelector('#expertQuery').value.toLowerCase()
+  const rows = experts.filter(e => `${e[1]} ${e[2]}`.toLowerCase().includes(q))
+  document.querySelector('#expertList').innerHTML = rows.map(e => `
+    <label>
+      <input type="checkbox" data-expert="${e[0]}" ${e[5]?'checked':''}>
+      <span><b>${e[1]}</b><small>${e[2]} · ${e[3]} players</small></span>
+      <time>${e[4]}</time>
+    </label>`).join('')
+  const n = selectedExperts().length
+  document.querySelector('#expertSelected').textContent = `${n} selected`
+  document.querySelector('#useExperts').textContent = `Use ${n} selected expert${n===1?'':'s'}`
+  document.querySelector('#useExperts').disabled = n===0
+}
+
+function showPanel(id){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('show'))
+  document.querySelector('#panel-'+id).classList.add('show')
+}
+
+function renderDetail(source){
+  showPanel('detail')
+  document.querySelector('#detailTitle').textContent = source.title
+  document.querySelector('#detailCopy').textContent = source.copy
+  document.querySelector('#detailChip').textContent = source.chip
+  document.querySelector('#detailMeta').textContent = source.meta
+  document.querySelector('#detailNote').textContent = source.note
+  document.querySelector('#detailToggle').textContent = source.enabled ? 'Disable' : 'Enable'
+  document.querySelector('#detailToggle').className = source.enabled ? 'danger' : 'primary'
+  document.querySelector('#detailRows').innerHTML = source.sample.map(([r,n,p]) =>
+    `<tr><td>${r}</td><td>${n}</td><td><span class="pos ${p}">${p}</span></td></tr>`).join('')
+}
+
+function renderHeader(){
+  const on = enabledSources()
+  const fp = sources[0]
+  document.querySelector('#statScoring').textContent = labels[scoring]
+  document.querySelector('#statScoringNote').textContent = scoringNotes[scoring]
+  document.querySelector('#statMethod').textContent = method==='median'?'Median':'Mean'
+  document.querySelector('#statCount').textContent = on.length
+  document.querySelector('#statMix').textContent = on.length ? `${on[0].name} + ${on.length-1} more` : 'Nothing enabled'
+  document.querySelector('#enabledCount').textContent = `${on.length} on`
+  document.querySelector('#subtitle').textContent =
+    `${method==='median'?'Median':'Mean'} of ${on.length} enabled source${on.length===1?'':'s'} · ${labels[scoring]} ${scoring==='ppr'?'detected from your league':'override'}`
+  fp.detail = fpMode==='experts' ? `${selectedExperts().length} expert boards · 312 matched` : `Consensus ECR · 312 matched`
+  fp.chip = fpMode==='experts' ? `${selectedExperts().length} experts` : 'Consensus'
+}
+
+function openSource(id){
+  selected = id
+  renderSources(); renderHeader()
+  if (id==='add') { showPanel('add'); return }
+  const source = sources.find(s=>s.id===id)
+  if (source.kind==='fp') {
+    showPanel('fp')
+    document.querySelector('#fpConsensus').hidden = fpMode!=='consensus'
+    document.querySelector('#fpExperts').hidden = fpMode!=='experts'
+    return
+  }
+  renderDetail(source)
+}
+
+document.querySelector('#sourceList').addEventListener('click', event => {
+  const toggle = event.target.closest('[data-toggle]')
+  if (toggle) {
+    event.stopPropagation()
+    const source = sources.find(s=>s.id===toggle.dataset.toggle)
+    source.enabled = toggle.checked
+    source.fresh = source.enabled ? (source.id==='cbs'?'stale':'live') : 'off'
+    renderHeader(); renderSources(); toast(source.enabled ? `${source.name} added to the table` : `${source.name} removed from the table`)
+    if (selected===source.id && source.kind==='detail') renderDetail(source)
+    return
+  }
+  const row = event.target.closest('[data-id]')
+  if (row) openSource(row.dataset.id)
+})
+document.querySelector('#addBtn').onclick = () => openSource('add')
+document.querySelector('#scoring').onchange = e => { scoring=e.target.value; renderHeader(); toast(`Scoring set to ${labels[scoring]}`) }
+document.querySelector('#method').onchange = e => { method=e.target.value; renderHeader(); toast(`Consensus now uses ${method}`) }
+document.querySelector('#modeConsensus').onclick = () => {
+  fpMode='consensus'
+  document.querySelector('#modeConsensus').classList.add('active')
+  document.querySelector('#modeExperts').classList.remove('active')
+  openSource('fp')
+}
+document.querySelector('#modeExperts').onclick = () => {
+  fpMode='experts'
+  document.querySelector('#modeExperts').classList.add('active')
+  document.querySelector('#modeConsensus').classList.remove('active')
+  openSource('fp')
+}
+document.querySelector('#expertList').addEventListener('change', event => {
+  const box = event.target.closest('[data-expert]')
+  if (!box) return
+  const expert = experts.find(e=>e[0]===box.dataset.expert)
+  expert[5] = box.checked
+  renderExperts(); renderHeader(); renderSources()
+})
+document.querySelector('#expertQuery').oninput = renderExperts
+document.querySelector('#selectAll').onclick = () => { experts.forEach(e=>e[5]=true); renderExperts(); renderHeader(); renderSources() }
+document.querySelector('#clearExperts').onclick = () => { experts.forEach(e=>e[5]=false); renderExperts(); renderHeader(); renderSources() }
+document.querySelector('#useExperts').onclick = () => {
+  const n = selectedExperts().length
+  const notice = document.querySelector('#notice')
+  notice.hidden = false
+  notice.textContent = `${n} expert boards enabled.`
+  sources[0].enabled = true
+  fpMode = 'experts'
+  renderHeader(); renderSources(); toast(`${n} expert boards now driving FantasyPros`)
+}
+document.querySelector('#useConsensus').onclick = () => {
+  fpMode = 'consensus'
+  sources[0].enabled = true
+  const notice = document.querySelector('#notice')
+  notice.hidden = false
+  notice.textContent = `${labels[scoring]} FantasyPros consensus enabled.`
+  renderHeader(); renderSources(); openSource('fp'); toast('FantasyPros consensus applied')
+}
+document.querySelector('#detailToggle').onclick = () => {
+  const source = sources.find(s=>s.id===selected)
+  source.enabled = !source.enabled
+  source.fresh = source.enabled ? (source.id==='cbs'?'stale':'live') : 'off'
+  renderHeader(); renderSources(); renderDetail(source)
+  toast(source.enabled ? `${source.name} enabled` : `${source.name} disabled`)
+}
+document.querySelector('#togglePaste').onclick = () => {
+  document.querySelector('#pasteBox').hidden = !document.querySelector('#pasteBox').hidden
+}
+document.querySelectorAll('.collect-grid label').forEach(label => {
+  label.querySelector('input').addEventListener('change', () => label.classList.toggle('on', label.querySelector('input').checked))
+})
+
+renderSources(); renderExperts(); renderHeader(); openSource('fp')
+</script>
+</body>
+</html>

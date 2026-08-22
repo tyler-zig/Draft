@@ -1,0 +1,66 @@
+# Dependencies
+/node_modules/
+
+# Build output and tool caches
+/dist/
+/dist-ssr/
+/.vite/
+/.turbo/
+/.cache/
+/coverage/
+*.tsbuildinfo
+*.eslintcache
+
+# Design mockups
+/mockup/
+
+# Test and browser artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/screenshots/
+
+# Runtime logs
+/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment and secrets. Keep the documented template.
+.env
+.env.*
+!.env.example
+*.local
+
+# Generated ranking and player-intelligence snapshots
+/data/rankings/
+/data/intelligence/
+/public/rankings/
+/public/intelligence/
+
+# Local Supabase CLI state
+/supabase/.branches/
+/supabase/.temp/
+
+# Packaged extension/release output and signing keys
+*.crx
+*.pem
+*.tgz
+*.zip
+
+# Editors and operating systems
+/.vscode/*
+!/.vscode/extensions.json
+/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~

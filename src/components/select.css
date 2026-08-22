@@ -1,0 +1,245 @@
+.app-select-host {
+  display: contents;
+  transform: none;
+}
+
+.app-select {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px 0 11px;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  background: var(--color-panel);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.app-select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-ink) 22%, var(--color-line));
+  background: var(--color-panel-2);
+}
+
+.app-select:focus,
+.app-select:focus-visible {
+  outline: none;
+  border-color: var(--select-accent, #3d8bff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--select-accent, #3d8bff) 20%, transparent);
+}
+
+.app-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.app-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select-chevron {
+  flex: none;
+  display: grid;
+  width: 10px;
+  height: 10px;
+  place-items: center;
+  color: var(--color-muted);
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.app-select-chevron svg {
+  display: block;
+}
+
+.app-select:hover:not(:disabled) .app-select-chevron,
+.app-select[aria-expanded="true"] .app-select-chevron {
+  color: inherit;
+  opacity: 1;
+}
+
+.app-select-menu {
+  position: fixed;
+  z-index: 400;
+  margin: 0;
+  padding: 5px;
+  overflow: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-ink);
+  box-shadow: 0 16px 40px #000a;
+  list-style: none;
+  font: 13px/1.35 inherit;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-muted) 55%, transparent) transparent;
+}
+
+.app-select-menu::-webkit-scrollbar {
+  width: 9px;
+}
+
+.app-select-menu::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--color-muted) 55%, transparent);
+  background-clip: padding-box;
+}
+
+.app-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-select-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.app-select-option[data-active="true"] {
+  background: var(--color-panel-2);
+}
+
+.app-select-option[aria-selected="true"] {
+  background: color-mix(in srgb, var(--select-accent, #3d8bff) 18%, var(--color-panel-2));
+  color: var(--color-ink);
+}
+
+.app-select-option[aria-selected="true"][data-active="true"] {
+  background: color-mix(in srgb, var(--select-accent, #3d8bff) 26%, var(--color-panel-2));
+}
+
+.app-select-check {
+  flex: none;
+  color: var(--select-accent, #3d8bff);
+  font-size: 12px;
+}
+
+html[data-theme="light"] .app-select-menu {
+  box-shadow: 0 16px 40px #38506433;
+}
+
+.cc-picker .app-select,
+.cc-picker .app-select:hover:not(:disabled),
+.cc-picker .app-select:focus,
+.cc-picker .app-select:focus-visible {
+  flex: 1;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cc-picker .app-select-chevron {
+  color: var(--cc-muted, var(--color-muted));
+}
+
+.cc-picker:hover .app-select-chevron,
+.cc-picker:focus-within .app-select-chevron,
+.cc-picker .app-select[aria-expanded="true"] .app-select-chevron {
+  color: var(--cc-blue, var(--select-accent, #3d8bff));
+}
+
+.cc-popover .app-select {
+  width: 100%;
+  height: 31px;
+  padding: 0 8px;
+  border-radius: 5px;
+}
+
+.cc-settings .app-select {
+  min-width: 170px;
+  height: auto;
+  padding: 7px 10px;
+  border-radius: 5px;
+  background: var(--cc-panel2, var(--color-panel-2));
+}
+
+.cc-rk-field .app-select,
+.cc-st-field .app-select {
+  width: 100%;
+  height: 34px;
+}
+
+.cc-rk-field .app-select:focus,
+.cc-rk-field .app-select:focus-visible,
+.cc-st-field .app-select:focus,
+.cc-st-field .app-select:focus-visible {
+  border-color: #3b6689;
+}
+
+.cc-expert-panel .cc-scoring-banner .app-select {
+  height: 29px;
+  padding: 0 8px;
+  border-color: #ffffff2e;
+  border-radius: 5px;
+  background: #0f251d;
+  color: inherit;
+  box-shadow: none;
+}
+
+.cc-light .cc-expert-panel .cc-scoring-banner .app-select {
+  border-color: #90bca5;
+  background: #f3fbf7;
+}
+
+.cc-keeper-round .app-select {
+  font-size: 11.5px;
+}
+
+.cc-team-picker .app-select {
+  min-width: 0;
+}
+
+.pi-toolbar .app-select {
+  height: 36px;
+  padding: 0 10px 0 10px;
+  border-color: var(--pi-line, var(--color-line));
+  border-radius: 5px;
+  background: #0e171f;
+}
+
+.pi-toolbar .app-select:focus,
+.pi-toolbar .app-select:focus-visible {
+  border-color: #3d796b;
+  box-shadow: 0 0 0 2px #3d796b20;
+}
+
+.lg-field .app-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border-color: var(--lg-line, var(--color-line));
+  border-radius: 6px;
+  background: #0d1219;
+}
+
+.lg-field .app-select:focus,
+.lg-field .app-select:focus-visible {
+  border-color: var(--lg-teal, var(--color-accent));
+  box-shadow: none;
+}

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Draft Assistant — Leagues</title>
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#0b0e14;--panel:#12171f;--panel2:#171d27;--line:#273140;--soft:#1c2430;
+      --ink:#f4f7fa;--muted:#8b98a8;--dim:#6b7785;
+      --teal:#2dd4bf;--green:#34d399;--blue:#3d8bff;--amber:#fbbf24;--red:#f87171;
+    }
+    *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#3a4654 #0b0e14}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:13px/1.4 Inter,"Segoe UI",system-ui,sans-serif}
+    button,input,select{font:inherit;color:inherit}button{cursor:pointer}
+    a{color:inherit;text-decoration:none}
+    .app{display:grid;grid-template-rows:56px minmax(0,1fr);height:100vh;min-width:1180px;overflow:hidden}
+
+    header{display:flex;align-items:center;gap:52px;padding:0 20px;border-bottom:1px solid var(--line);background:#0e1219}
+    .brand{display:flex;align-items:center;gap:7px;font-size:16px;font-weight:700;white-space:nowrap}
+    .brand b{color:var(--teal)}
+    .mark{display:grid;width:30px;height:34px;place-items:center;color:var(--teal);font-size:29px}
+    .page-title{flex:1;text-align:center}
+    .page-title small{display:block;color:var(--teal);font-size:9px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}
+    .page-title b{font-size:15px;font-weight:650}
+    .top-actions{display:flex;align-items:center;gap:12px;margin-left:auto}
+    header nav{display:flex;align-self:stretch;gap:28px}
+    header nav a{display:flex;align-items:center;padding:0 12px;color:#c1c6cd}
+    header nav a.active{color:var(--teal);box-shadow:inset 0 -2px var(--teal)}
+    .avatar{display:grid;width:34px;height:34px;place-items:center;border:1px solid var(--line);border-radius:50%;background:#222a34;font-size:11px;font-weight:700}
+
+    .workspace{display:grid;grid-template-columns:312px minmax(0,1fr);min-height:0}
+    .list{display:flex;min-height:0;flex-direction:column;border-right:1px solid #18222e;background:var(--panel)}
+    .list-head{padding:18px 18px 12px}
+    .list-head h1{margin:4px 0 0;font-size:26px;letter-spacing:-.03em}
+    .list-head p{margin:4px 0 0;color:var(--muted);font-size:12px}
+    .eyebrow{color:var(--teal);font-size:10px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}
+    .search{display:flex;height:34px;align-items:center;margin:0 18px 10px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:#0d1219}
+    .search input{width:100%;border:0;background:none;outline:0}
+    .rows{min-height:0;flex:1;overflow:auto}
+    .group{padding:8px 18px 4px;color:var(--dim);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    .row{position:relative;display:grid;width:100%;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px;padding:8px 16px 8px 18px;border:0;border-bottom:1px solid var(--line);background:none;text-align:left}
+    .row:hover{background:#171e27}
+    .row.on{background:#1c2e39}
+    .row.on:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--teal)}
+    .row b{display:block;overflow:hidden;font-size:14px;font-weight:550;text-overflow:ellipsis;white-space:nowrap}
+    .row small{display:block;color:#c3c9d0;font-size:11px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#3a4654}
+    .dot.live{background:var(--green);box-shadow:0 0 0 3px #34d39922}
+    .dot.warn{background:var(--amber)}
+    .status{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .row.on .status.live{color:var(--green)}
+    .list-foot{padding:12px 14px 16px;border-top:1px solid var(--line)}
+    .add-row,.demo-row{display:flex;width:100%;align-items:center;justify-content:space-between;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:6px;background:#0d1219;color:#dbe1e5}
+    .add-row{margin-bottom:8px}
+    .add-row.on,.demo-row.on{border-color:var(--teal);color:var(--teal)}
+    .add-row span,.demo-row span{color:var(--muted);font-size:11px}
+
+    main{min-width:0;min-height:0;overflow:auto;padding:28px 40px 40px;background:radial-gradient(circle at 70% 0,#14202a 0,transparent 36%),var(--bg)}
+    .pane{display:none;max-width:820px}.pane.show{display:block}
+    .kicker{display:flex;align-items:center;justify-content:space-between}
+    .kicker .live{color:var(--green)}
+    .kicker .warn{color:var(--amber)}
+    .kicker .muted{color:var(--muted)}
+    h2{margin:10px 0 0;font-size:42px;letter-spacing:-.03em;line-height:1.1}
+    .sub{display:flex;align-items:center;gap:12px;margin:8px 0 0;color:#c2c6cd;font-size:16px}
+    .sub i{width:1px;height:16px;background:#6b7480}
+    .provider{padding:3px 7px;border-radius:4px;background:#18342b;color:var(--teal);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .provider.espn{background:#2a2112;color:#f0b27a}
+    .clock{margin:22px 0 0;color:var(--green);font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    .clock b{font-size:28px;letter-spacing:0}
+    .actions{display:flex;gap:10px;margin-top:22px}
+    .primary{min-width:220px;height:44px;border:0;border-radius:6px;background:linear-gradient(135deg,#65e2d7,#3fc9c6);color:#061316;font-size:16px;font-weight:650}
+    .primary:disabled{opacity:.4;cursor:not-allowed}
+    .ghost{height:44px;padding:0 16px;border:1px solid var(--line);border-radius:6px;background:#151c24;color:var(--ink)}
+    .ghost:hover{border-color:#53606d}
+    .quiet{height:44px;padding:0 16px;border:0;background:none;color:var(--muted)}
+    .quiet:hover{color:var(--red)}
+
+    .facts{display:grid;grid-template-columns:repeat(4,1fr);margin-top:28px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:linear-gradient(135deg,#171e26,#10161d)}
+    .facts div{padding:14px 16px}
+    .facts div+div{border-left:1px solid var(--line)}
+    .facts small{display:block;color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+    .facts b{display:block;margin-top:4px;font-size:18px;font-weight:550}
+    .facts span{display:block;margin-top:2px;color:var(--dim);font-size:11px}
+
+    .note{max-width:520px;margin:18px 0 0;color:var(--muted);font-size:13px;line-height:1.5}
+    .seg{display:grid;grid-template-columns:1fr 1fr;max-width:280px;padding:3px;border:1px solid var(--line);border-radius:8px;background:#0d1219}
+    .seg button{height:34px;border:0;border-radius:6px;background:none;color:var(--muted);font-weight:700;text-transform:uppercase;font-size:11px}
+    .seg button.on{background:var(--panel2);color:var(--ink)}
+    .form{display:grid;gap:12px;max-width:460px;margin-top:20px}
+    .field{display:grid;gap:6px}
+    .field span{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+    .field input,.field select{height:38px;padding:0 11px;border:1px solid var(--line);border-radius:6px;background:#0d1219;outline:0}
+    .field input:focus,.field select:focus{border-color:var(--teal)}
+    .row2{display:grid;grid-template-columns:120px 1fr;gap:8px}
+    .found{display:none;margin-top:22px}
+    .found.show{display:block}
+    .found h3{margin:0 0 8px;font-size:13px}
+    .found-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+    .found-row b{display:block}
+    .found-row small{color:var(--muted)}
+    .mini{height:32px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:#151c24;font-size:11px;font-weight:700}
+    .teams{display:grid;gap:6px;max-width:460px;margin-top:16px}
+    .team{display:flex;align-items:center;justify-content:space-between;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:6px;background:#0d1219;text-align:left}
+    .team:hover,.team.you{border-color:#3b6689}
+    .team.you{background:#13251e}
+    .team small{color:var(--teal);font-weight:700;text-transform:uppercase}
+    .help{margin:10px 0 0;color:var(--dim);font-size:12px;line-height:1.45}
+    .empty-main{padding-top:8px}
+    .empty-main h2{font-size:34px}
+    .toast{position:fixed;right:18px;bottom:18px;padding:10px 14px;border:1px solid #315846;border-radius:7px;background:#13251e;color:#bcebd0;opacity:0;transition:.2s}
+    .toast.show{opacity:1}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <a class="brand" href="#"><span class="mark">»</span>Draft Assistant</a>
+    <div class="page-title"><small>Home</small><b>Leagues</b></div>
+    <div class="top-actions">
+      <nav>
+        <a class="active" href="#">Leagues</a>
+        <a href="players-command-center-mockup.html">Players</a>
+        <a href="rankings-menu-redesign.html">Rankings</a>
+      </nav>
+      <span class="avatar">TZ</span>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="list">
+      <div class="list-head">
+        <div class="eyebrow">2026 season</div>
+        <h1>Leagues</h1>
+        <p id="listMeta">4 saved · synced to your account</p>
+      </div>
+      <label class="search"><input id="search" placeholder="Filter leagues…"></label>
+      <div class="rows" id="rows"></div>
+      <div class="list-foot">
+        <button class="add-row" type="button" data-select="add"><span>+ Add league</span><span>Sleeper or ESPN</span></button>
+        <button class="demo-row" type="button" data-select="demo"><span>Demo draft</span><span>No league needed</span></button>
+      </div>
+    </aside>
+
+    <main>
+      <section class="pane" id="paneLeague"></section>
+
+      <section class="pane" id="paneAdd">
+        <div class="kicker"><span class="eyebrow">New connection</span><span class="muted">Saved after you enter a room</span></div>
+        <h2>Add a league</h2>
+        <p class="sub">Sleeper from a username. ESPN from the tab you are logged into.</p>
+        <div class="seg" id="providerTabs" style="margin-top:22px">
+          <button class="on" type="button" data-tab="sleeper">Sleeper</button>
+          <button type="button" data-tab="espn">ESPN</button>
+        </div>
+
+        <div id="tabSleeper">
+          <div class="form">
+            <label class="field"><span>Username</span><input id="sleeperUser" value="tziegler" spellcheck="false" autocomplete="off"></label>
+            <div class="row2">
+              <label class="field"><span>Season</span><select id="season"><option>2026</option><option>2025</option><option>2024</option></select></label>
+              <label class="field"><span>&nbsp;</span><button class="primary" type="button" id="findSleeper" style="min-width:0;width:100%;height:38px;font-size:13px">Find leagues</button></label>
+            </div>
+          </div>
+          <p class="help">Sleeper is read-only. You still make picks on the league site.</p>
+          <div class="found" id="found">
+            <h3>Found for <span id="foundName">tziegler</span></h3>
+            <div id="foundRows"></div>
+          </div>
+        </div>
+
+        <div id="tabEspn" hidden>
+          <p class="note">Extension is on. Home League is on this Chrome profile.</p>
+          <div class="facts" style="max-width:460px;grid-template-columns:1fr 1fr 1fr">
+            <div><small>League</small><b>Home League</b><span>ESPN</span></div>
+            <div><small>Scoring</small><b>Half PPR</b><span>10 teams</span></div>
+            <div><small>Draft</small><b>Pre-draft</b><span>Snake</span></div>
+          </div>
+          <p class="help" style="margin-top:18px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:10px;color:var(--muted)">Which team is yours?</p>
+          <div class="teams">
+            <button class="team you" type="button" data-enter="home"><span>TZ Thunder</span><small>Detected</small></button>
+            <button class="team" type="button" data-enter="home"><span>Gridlock</span><small style="color:var(--muted)">Enter</small></button>
+            <button class="team" type="button" data-enter="home"><span>Night Shift</span><small style="color:var(--muted)">Enter</small></button>
+          </div>
+          <button class="ghost" type="button" style="margin-top:14px;height:36px" data-toast="Opening ESPN Fantasy">Open ESPN Fantasy</button>
+          <label class="field" style="max-width:460px;margin-top:14px"><span>Or paste a team URL</span><input placeholder="https://fantasy.espn.com/football/team?leagueId=…"></label>
+        </div>
+      </section>
+
+      <section class="pane" id="paneDemo">
+        <div class="kicker"><span class="eyebrow">Practice room</span><span class="muted">No league connected</span></div>
+        <h2>Try the draft room first</h2>
+        <p class="sub">12-team PPR snake · built-in ranks · demo controls</p>
+        <p class="note">Use this to learn the board, queue, and recs before connecting a real Sleeper or ESPN draft.</p>
+        <div class="actions"><button class="primary" type="button" data-toast="Starting demo draft">Start demo draft</button></div>
+      </section>
+
+      <section class="pane empty-main" id="paneEmpty">
+        <div class="kicker"><span class="eyebrow">No saved leagues</span></div>
+        <h2>Connect a draft to sit next to.</h2>
+        <p class="note">Nothing is pinned yet. Add a Sleeper username or open ESPN from the left rail. The next room you enter is remembered here.</p>
+        <div class="actions"><button class="primary" type="button" data-select="add">Add a league</button><button class="ghost" type="button" data-select="demo">Try the demo</button></div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const leagues = [
+  {id:'the-league', name:'The League', provider:'Sleeper', team:'Gridiron Gang', scoring:'PPR', teams:12, type:'Snake', status:'live', opened:'Today', season:'2026', round:5, pick:52, seconds:48, draft:true},
+  {id:'home', name:'Home League', provider:'ESPN', team:'TZ Thunder', scoring:'Half PPR', teams:10, type:'Snake', status:'pre', opened:'Yesterday', season:'2026', draft:true},
+  {id:'keepers', name:'Dynasty Keepers', provider:'Sleeper', team:'Midnight Express', scoring:'PPR', teams:12, type:'Dynasty', status:'done', opened:'6 days ago', season:'2026', draft:true},
+  {id:'office', name:'Office Pool', provider:'ESPN', team:'Night Shift', scoring:'Standard', teams:8, type:'Auction', status:'warn', opened:'12 days ago', season:'2026', draft:false},
+]
+const found = [
+  {id:'f1', name:'Redraft Royale', scoring:'Half PPR', teams:14, type:'Snake', status:'Pre-draft', draft:true},
+  {id:'f2', name:'Deep Bench', scoring:'PPR', teams:16, type:'Superflex', status:'Pre-draft', draft:false},
+  {id:'f3', name:'The League', scoring:'PPR', teams:12, type:'Snake', status:'Live', draft:true},
+]
+const labels = {live:'Live', pre:'Pre-draft', warn:'Paused', done:'Complete'}
+const dots = {live:'live', pre:'', warn:'warn', done:''}
+let selected = 'the-league'
+let query = ''
+let hidden = new Set()
+
+const toast = (msg) => {
+  const el = document.querySelector('#toast')
+  el.textContent = msg
+  el.classList.add('show')
+  clearTimeout(toast.t)
+  toast.t = setTimeout(() => el.classList.remove('show'), 1400)
+}
+const visible = () => leagues.filter((league) => !hidden.has(league.id) && `${league.name} ${league.team} ${league.provider}`.toLowerCase().includes(query))
+const clock = (seconds) => `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`
+
+function renderList() {
+  const items = visible()
+  document.querySelector('#listMeta').textContent = items.length
+    ? `${items.length} saved · synced to your account`
+    : 'Nothing pinned yet'
+  document.querySelector('#rows').innerHTML = items.length
+    ? `<div class="group">Your leagues</div>` + items.map((league) => `
+      <button class="row ${selected===league.id?'on':''}" type="button" data-select="${league.id}">
+        <i class="dot ${dots[league.status]}"></i>
+        <span><b>${league.name}</b><small>${league.provider} · ${league.team}</small></span>
+        <span class="status ${league.status}">${labels[league.status]}</span>
+      </button>`).join('')
+    : ''
+  document.querySelector('.add-row').classList.toggle('on', selected==='add')
+  document.querySelector('.demo-row').classList.toggle('on', selected==='demo')
+}
+
+function renderLeague(league) {
+  const live = league.status==='live'
+  const tone = live ? 'live' : league.status==='warn' ? 'warn' : 'muted'
+  document.querySelector('#paneLeague').innerHTML = `
+    <div class="kicker"><span class="eyebrow">Selected league</span><span class="${tone}">● ${labels[league.status]}</span></div>
+    <h2>${league.name}</h2>
+    <p class="sub"><span class="provider ${league.provider.toLowerCase()}">${league.provider}</span> ${league.season}<i></i>${league.scoring}<i></i>${league.teams} teams</p>
+    ${live ? `<div class="clock">Your pick in <b id="clock">${clock(league.seconds)}</b> · Round ${league.round}, Pick ${league.pick}</div>` : ''}
+    <div class="actions">
+      <button class="primary" type="button" ${league.draft?'':'disabled'} data-toast="${league.draft?`Opening ${league.name}`:'This league has no draft yet'}">${live?'Enter live draft':league.draft?'Open draft room':'No draft yet'}</button>
+      <button class="ghost" type="button" data-toast="Opening Players for ${league.name}">Players</button>
+      <button class="quiet" type="button" data-forget="${league.id}">Forget</button>
+    </div>
+    <div class="facts">
+      <div><small>Your team</small><b>${league.team}</b><span>Seat remembered</span></div>
+      <div><small>Scoring</small><b>${league.scoring}</b><span>${league.type}</span></div>
+      <div><small>Last opened</small><b>${league.opened}</b><span>Most recent first</span></div>
+      <div><small>Draft</small><b>${labels[league.status]}</b><span>${league.draft?'Room ready':'No draft id'}</span></div>
+    </div>
+    <p class="note">${league.provider==='Sleeper'?'Sleeper stays read-only from the public API.':'ESPN syncs from the extension on your logged-in tab. No cookie paste.'} Rankings use the lists you already enabled.</p>`
+}
+
+function showPane() {
+  const items = visible()
+  const league = leagues.find((item) => item.id===selected && !hidden.has(item.id))
+  const view = selected==='add' ? 'add' : selected==='demo' ? 'demo' : league ? 'league' : items.length ? 'league' : 'empty'
+  if (view==='league' && !league) selected = items[0].id
+  document.querySelectorAll('.pane').forEach((pane) => pane.classList.remove('show'))
+  if (view==='add') document.querySelector('#paneAdd').classList.add('show')
+  else if (view==='demo') document.querySelector('#paneDemo').classList.add('show')
+  else if (view==='empty') document.querySelector('#paneEmpty').classList.add('show')
+  else {
+    document.querySelector('#paneLeague').classList.add('show')
+    renderLeague(leagues.find((item) => item.id===selected))
+  }
+}
+
+function render() {
+  if (selected!=='add' && selected!=='demo' && hidden.has(selected)) selected = visible()[0]?.id || 'empty'
+  renderList()
+  showPane()
+}
+
+function select(id) {
+  selected = id
+  render()
+}
+
+document.querySelector('#search').addEventListener('input', (event) => {
+  query = event.target.value.toLowerCase()
+  render()
+})
+document.querySelector('#providerTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('button')
+  if (!button) return
+  document.querySelectorAll('#providerTabs button').forEach((item) => item.classList.toggle('on', item===button))
+  document.querySelector('#tabSleeper').hidden = button.dataset.tab!=='sleeper'
+  document.querySelector('#tabEspn').hidden = button.dataset.tab!=='espn'
+})
+document.querySelector('#findSleeper').addEventListener('click', () => {
+  document.querySelector('#foundName').textContent = document.querySelector('#sleeperUser').value || 'that username'
+  document.querySelector('#foundRows').innerHTML = found.map((league) => `
+    <div class="found-row">
+      <div><b>${league.name}</b><small>${league.teams} teams · ${league.scoring} · ${league.type} · ${league.status}</small></div>
+      ${league.draft?`<button class="mini" type="button" data-toast="Opening ${league.name}">Enter</button>`:'<span class="status">No draft</span>'}
+      <button class="mini" type="button" data-toast="Saved ${league.name}">Save</button>
+    </div>`).join('')
+  document.querySelector('#found').classList.add('show')
+})
+document.body.addEventListener('click', (event) => {
+  const forget = event.target.closest('[data-forget]')
+  if (forget) { hidden.add(forget.dataset.forget); toast('Removed from this list'); render(); return }
+  const next = event.target.closest('[data-select]')
+  if (next) { select(next.dataset.select); return }
+  const enter = event.target.closest('[data-enter]')
+  if (enter) { select(enter.dataset.enter); toast('Opening Home League'); return }
+  const notice = event.target.closest('[data-toast]')
+  if (notice) toast(notice.dataset.toast)
+})
+setInterval(() => {
+  const league = leagues.find((item) => item.id==='the-league')
+  if (!league.seconds) league.seconds = 90
+  league.seconds -= 1
+  const clockEl = document.querySelector('#clock')
+  if (clockEl) clockEl.textContent = clock(league.seconds)
+}, 1000)
+render()
+</script>
+</body>
+</html>

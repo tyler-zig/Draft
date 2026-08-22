@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+  --color-ink: #e8eef7;
+  --color-muted: #8b9bb4;
+  --color-bg: #0b111a;
+  --color-panel: #121a26;
+  --color-panel-2: #182232;
+  --color-line: #243044;
+  --color-accent: #3ee0a0;
+  --color-accent-dim: #16382c;
+  --color-warn: #f5c14a;
+  --color-danger: #f87171;
+  --color-qb: #f5c14a;
+  --color-rb: #4ade80;
+  --color-wr: #60a5fa;
+  --color-te: #f87171;
+  --color-k: #c4b5fd;
+  --color-def: #94a3b8;
+}
+
+html {
+  color-scheme: dark;
+  --select-accent: #3d8bff;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --select-accent: #176fc1;
+  --color-ink: #17212b;
+  --color-muted: #617181;
+  --color-bg: #eef3f7;
+  --color-panel: #ffffff;
+  --color-panel-2: #e6edf3;
+  --color-line: #c5d0da;
+  --color-accent: #087a55;
+  --color-accent-dim: #d7eee5;
+}
+
+html[data-theme="light"] ::selection {
+  background: #c5e8d8;
+  color: #087a55;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01" 1, "cv11" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: #1a3d32;
+  color: var(--color-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--color-line);
+  border-top-color: var(--color-accent);
+  border-radius: 999px;
+  animation: spin 0.7s linear infinite;
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.15s ease-in-out infinite;
+}
+
+/* Scoring the league never published: everything downstream is a fallback. */
+.cc-scoring-unknown { color: var(--warn, #d98324); }
+
+/* Term-by-term scoring for the featured suggestion: which signal actually won. */
+.cc-score-breakdown { margin: 0 0 .5rem; font-size: .72rem; }
+.cc-score-breakdown summary { cursor: pointer; color: var(--muted, #8b93a7); padding: .25rem 0; }
+.cc-score-breakdown ul { list-style: none; margin: .25rem 0 0; padding: 0; }
+.cc-score-breakdown li { display: flex; justify-content: space-between; gap: 1rem; padding: .1rem 0; }
+.cc-score-breakdown b { font-variant-numeric: tabular-nums; }
