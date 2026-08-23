@@ -110,6 +110,7 @@
   let collapsed = false
   let tab = 'picks'
   let pos = null
+  let clockTimer = null
 
   function isDraftPath(pathname) {
     return /\/(?:football\/)?draft(?:\/|$)/i.test(pathname || location.pathname)
@@ -129,11 +130,32 @@
     return local
   }
 
+  function formatClock(seconds) {
+    const safe = Math.max(0, Math.floor(seconds))
+    return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
+  }
+
+  function clockRemaining() {
+    const clock = snapshot?.clock
+    if (!clock) return null
+    if (clock.paused || clock.endsAt == null) return Math.max(0, Math.round(clock.remaining))
+    return Math.max(0, Math.ceil((clock.endsAt - Date.now()) / 1000))
+  }
+
   function clockText(state) {
-    if (!state) return ''
-    if (state.youAreOnClock) return 'On the clock'
-    if (state.until == null) return `Pick ${state.currentPickNo ?? '—'}`
-    return `Your pick in ${state.until}`
+    const seconds = clockRemaining()
+    const time = seconds != null ? formatClock(seconds) : ''
+    if (!state) return time
+    if (state.youAreOnClock) return time || 'On the clock'
+    if (state.until == null) return time ? `Pick ${state.currentPickNo ?? '—'} · ${time}` : `Pick ${state.currentPickNo ?? '—'}`
+    return time ? `Your pick in ${state.until} · ${time}` : `Your pick in ${state.until}`
+  }
+
+  function ensureClockTick() {
+    if (clockTimer) return
+    clockTimer = window.setInterval(() => {
+      if (snapshot?.clock?.endsAt && !snapshot.clock.paused) render()
+    }, 500)
   }
 
   function formatAdp(value) {
@@ -501,10 +523,13 @@
     shadow.appendChild(wrap)
     document.documentElement.appendChild(host)
     bind()
+    ensureClockTick()
     render()
   }
 
   function unmount() {
+    if (clockTimer) window.clearInterval(clockTimer)
+    clockTimer = null
     host?.remove()
     host = null
     shadow = null

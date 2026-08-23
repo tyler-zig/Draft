@@ -16,11 +16,26 @@ export function DraftBoard({
   currentPickNo: number
   onSelect?: (playerId: string) => void
 }) {
-  const byKey = useMemo(() => {
-    const map = new Map<string, DraftPick>()
+  /**
+   * Picks by their overall pick number -- the same key the footer strip uses.
+   *
+   * This was keyed on the pick's own `round` and `draftSlot`, which are a
+   * proxy for its board position rather than the position itself. Providers
+   * can disagree with that proxy: ESPN takes `pickNo` from `overallPickNumber`
+   * but `round` from `roundId`, and after a few rounds of keepers those stop
+   * lining up -- so the full board placed a pick in one cell while the strip,
+   * which resolves by `pickNo`, placed it in another. A round/slot collision
+   * was worse than misplacement: `Map.set` overwrote, dropping a pick from the
+   * board entirely.
+   *
+   * First write wins, matching the `find` the strip does, so the two views
+   * agree even when a provider reports two picks for one number.
+   */
+  const byPickNo = useMemo(() => {
+    const map = new Map<number, DraftPick>()
     for (const pick of picks) {
       if (pick.pickNo < 1) continue
-      map.set(`${pick.round}-${pick.draftSlot}`, pick)
+      if (!map.has(pick.pickNo)) map.set(pick.pickNo, pick)
     }
     return map
   }, [picks])
@@ -60,8 +75,7 @@ export function DraftBoard({
             key={round}
             round={round}
             session={session}
-            picks={picks}
-            byKey={byKey}
+            byPickNo={byPickNo}
             playerById={playerById}
             currentPickNo={currentPickNo}
             onSelect={onSelect}
@@ -75,16 +89,14 @@ export function DraftBoard({
 function RoundRow({
   round,
   session,
-  picks,
-  byKey,
+  byPickNo,
   playerById,
   currentPickNo,
   onSelect,
 }: {
   round: number
   session: DraftSession
-  picks: DraftPick[]
-  byKey: Map<string, DraftPick>
+  byPickNo: Map<number, DraftPick>
   playerById: Map<string, Player>
   currentPickNo: number
   onSelect?: (playerId: string) => void
@@ -94,7 +106,7 @@ function RoundRow({
       <div className="cc-full-board-round">{round}</div>
       {session.order.map((slot) => {
         const pickNo = pickNumberFor(round, slot.slot, session.teams, session.type, session.pickOwners)
-        const pick = byKey.get(`${round}-${slot.slot}`) ?? picks.find((entry) => entry.pickNo === pickNo)
+        const pick = byPickNo.get(pickNo)
         const player = pick ? playerById.get(pick.playerId) : undefined
         const first = player?.firstName ?? pick?.meta?.firstName ?? ''
         const last = player?.lastName ?? pick?.meta?.lastName ?? ''

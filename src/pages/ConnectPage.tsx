@@ -272,6 +272,25 @@ export function ConnectPage() {
 
   function openSaved(league: SavedLeague) {
     remember({ ...league, lastOpenedAt: Date.now() })
+    if (league.provider === 'espn') {
+      requestOpenEspn({
+        leagueId: league.leagueId,
+        season: league.season,
+        teamId: league.externalUserId,
+        page: 'team',
+        returnToApp: true,
+      })
+      return
+    }
+    if (league.provider === 'yahoo' || league.provider === 'nfl') {
+      requestOpenSite(league.provider, {
+        leagueId: league.leagueId,
+        season: league.season,
+        teamId: league.externalUserId,
+        page: 'team',
+        returnToApp: true,
+      })
+    }
   }
 
   const listMeta = savedLeagues.length
@@ -454,7 +473,7 @@ function LeaguePane({ league, onOpen, onForget }: {
       <p className="lg-note">
         {league.provider === 'sleeper'
           ? 'Sleeper stays read-only from the public API.'
-          : `${providerLabel(league.provider)} syncs from the extension on your logged-in tab. No cookie paste.`}
+          : `${providerLabel(league.provider)} syncs from the extension. Opening the room refreshes that league tab, then comes back here.`}
         {' '}Rankings use the lists you already enabled.
       </p>
     </section>

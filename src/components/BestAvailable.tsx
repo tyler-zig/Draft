@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react'
 import type { Recommendation } from '../draft/recommend'
 import { marketBaseline } from '../draft/playerContext'
 import { InjuryDot } from './InjuryDot'
 import { PlayerPhoto } from './PlayerPhoto'
+import { ProjectionHover } from './ProjectionHover'
 
 const positionClass = (position: string) => `cc-${position.toLowerCase().replace('/', '')}`
 
@@ -71,9 +73,9 @@ export function BestAvailable({
         <Meter
           label="Projected Points"
           hint={best.projectedPoints != null
-            ? "RotoWire season projection via Sleeper, scored to this league's format — the same figure behind VORP."
-            : 'No Sleeper season projection is published for this player.'}
-          value={best.projectedPoints == null ? '—' : best.projectedPoints.toFixed(1)}
+            ? "Consensus season projection scored to this league's format — the same figure behind VORP. Hover the number for each source's line."
+            : 'No season projection is published for this player.'}
+          value={<ProjectionHover value={best.projectedPoints} breakdown={best.projectionBreakdown} label="Projected points" />}
           tone="blue"
           width={best.projectedPoints == null ? 8 : Math.max(8, Math.min(92, best.projectedPoints / 4))}
           scale={['80', '200', '320']}
@@ -114,7 +116,7 @@ export function BestAvailable({
   )
 }
 
-function Meter({ label, value, tone, width, scale, hint }: { label: string; value: string; tone: 'green' | 'blue'; width: number; scale: [string, string, string]; hint?: string }) {
+function Meter({ label, value, tone, width, scale, hint }: { label: string; value: ReactNode; tone: 'green' | 'blue'; width: number; scale: [string, string, string]; hint?: string }) {
   return (
     <div className="cc-meter">
       <div className="cc-meter-top">

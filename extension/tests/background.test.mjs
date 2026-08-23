@@ -76,9 +76,9 @@ function makeCtx(tabs = []) {
   return { ctx, session, local, sent, tabOps, listeners }
 }
 
-const dispatch = (listeners, msg) =>
+const dispatch = (listeners, msg, sender = {}) =>
   new Promise((resolve) => {
-    for (const fn of listeners) if (fn(msg, {}, resolve)) return
+    for (const fn of listeners) if (fn(msg, sender, resolve)) return
     resolve(undefined)
   })
 
@@ -308,6 +308,19 @@ console.log('\nname-only practice clone cannot restore itself')
   const exited = await dispatch(listeners, { type: 'EXIT_ESPN_PRACTICE' })
   check('recognizes Practice Draft for ... by name', local.get('espnIgnoredPracticeLeagueIds')?.includes('888') === true)
   check('clears instead of restoring the same clone', exited?.restoredLeagueId === null && session.get('espnSnapshot') === null)
+}
+
+console.log('\nreopening a league refreshes the site tab')
+{
+  const leagueUrl = 'https://fantasy.espn.com/football/team?leagueId=123&seasonId=2026'
+  const tabs = [
+    { id: 1, url: 'http://localhost:5173/draft/espn/x', windowId: 4 },
+    { id: 2, url: leagueUrl, windowId: 5 },
+  ]
+  const { tabOps, listeners } = makeCtx(tabs)
+  await dispatch(listeners, { type: 'OPEN_ESPN', leagueId: '123', season: '2026', returnToApp: true }, { tab: { id: 1, windowId: 4 } })
+  check('reloads the already-open ESPN league tab', tabOps.some((row) => row.op === 'reload' && row.id === 2))
+  check('returns focus to the app tab', tabOps.some((row) => row.op === 'update' && row.id === 1 && row.patch.active === true))
 }
 
 console.log('\nOpen ESPN Fantasy skips dead draft tabs')

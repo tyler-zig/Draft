@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  espnSnapshotPickCount,
   espnSnapshotPickStamp,
+  mergeEspnSnapshots,
   isEspnPracticeLeague,
   mapEspnKeeperCandidates,
   mapEspnKeepers,
@@ -248,6 +250,22 @@ describe('ESPN practice drafts', () => {
 describe('mapEspnSession', () => {
   it('carries the league keeper limit', () => {
     expect(mapEspnSession(snapshot(), '1').keeperCount).toBe(2)
+  })
+
+  it('carries the live draft-room clock when the injector scraped one', () => {
+    const live = snapshot()
+    live.clock = { remaining: 87, endsAt: 1_700_000_087_000, paused: false }
+    const session = mapEspnSession(live, '1')
+    expect(session.clockEndsAt).toBe(1_700_000_087_000)
+    expect(session.clockPaused).toBe(false)
+  })
+
+  it('freezes a paused ESPN clock', () => {
+    const live = snapshot()
+    live.clock = { remaining: 41, endsAt: 1_700_000_041_000, paused: true }
+    const session = mapEspnSession(live, '1')
+    expect(session.clockEndsAt).toBeNull()
+    expect(session.clockPaused).toBe(true)
   })
 
   it('keeps ESPN team logos when the snapshot includes a URL', () => {
@@ -502,5 +520,78 @@ describe('scoring detection', () => {
   it('only says unknown when nothing was published at all', () => {
     expect(withItems(undefined)).toBe('unknown')
     expect(withItems([])).toBe('unknown')
+  })
+})
+
+describe('mergeEspnSnapshots', () => {
+  const pick = (overall: number, playerId: number, teamId = 1) =>
+    ({ overallPickNumber: overall, playerId, teamId, roundId: Math.ceil(overall / 2), roundPickNumber: ((overall - 1) % 2) + 1 })
+  const EMPTY = -1
+
+  const snap = (picks: unknown[], extra: Record<string, unknown> = {}) => ({
+    leagueId: '146234', season: '2026', fetchedAt: Date.now(),
+    league: {
+      settings: { size: 2, name: 'The Best League' },
+      teams: [{ id: 1 }, { id: 2 }],
+      draftDetail: { inProgress: true, drafted: false, picks, ...(extra.draftDetail ?? {}) },
+    },
+    ...extra,
+  }) as unknown as EspnSnapshot
+
+  it('keeps picks a degraded snapshot no longer knows about', () => {
+    // The live case: the assistant had the full board, then the ESPN tab was
+    // disconnected and the read model came back with keepers only.
+    const cached = snap([pick(1, 101), pick(2, 102), pick(3, 103), pick(4, 104)])
+    const incoming = snap([pick(1, 101), pick(2, EMPTY), pick(3, EMPTY), pick(4, EMPTY)])
+    const merged = mergeEspnSnapshots(cached, incoming)
+    expect(espnSnapshotPickCount(merged)).toBe(4)
+    expect(mapEspnPicks(merged).map((p) => p.playerId).sort()).toEqual(['101', '102', '103', '104'])
+  })
+
+  it('does not leave both a retained pick and its placeholder on the board', () => {
+    const cached = snap([pick(1, 101), pick(2, 102)])
+    const incoming = snap([pick(1, 101), pick(2, EMPTY)])
+    const picks = mergeEspnSnapshots(cached, incoming).league!.draftDetail!.picks!
+    expect(picks.filter((p) => p.overallPickNumber === 2)).toHaveLength(1)
+  })
+
+  it('takes new picks from the incoming snapshot', () => {
+    const cached = snap([pick(1, 101), pick(2, 102)])
+    const incoming = snap([pick(1, 101), pick(2, 102), pick(3, 103)])
+    expect(espnSnapshotPickCount(mergeEspnSnapshots(cached, incoming))).toBe(3)
+  })
+
+  it('prefers the incoming pick when both know a slot', () => {
+    const cached = snap([pick(1, 101)])
+    const incoming = snap([pick(1, 999)])
+    expect(mapEspnPicks(mergeEspnSnapshots(cached, incoming))[0]?.playerId).toBe('999')
+  })
+
+  it('lets a completed draft replace the board outright', () => {
+    // Once ESPN publishes the finished draft its read model is authoritative,
+    // which is what clears a rolled-back pick.
+    const cached = snap([pick(1, 101), pick(2, 102)])
+    const incoming = snap([pick(1, 101)], { draftDetail: { drafted: true, inProgress: false } })
+    expect(espnSnapshotPickCount(mergeEspnSnapshots(cached, incoming))).toBe(1)
+  })
+
+  it('never carries picks between different drafts', () => {
+    const cached = snap([pick(1, 101), pick(2, 102)])
+    const other = { ...snap([pick(1, 501)]), leagueId: '999' } as EspnSnapshot
+    expect(espnSnapshotPickCount(mergeEspnSnapshots(cached, other))).toBe(1)
+    const nextSeason = { ...snap([pick(1, 501)]), season: '2027' } as EspnSnapshot
+    expect(espnSnapshotPickCount(mergeEspnSnapshots(cached, nextSeason))).toBe(1)
+  })
+
+  it('keeps a drafted defense, whose ESPN id is negative', () => {
+    const cached = snap([pick(1, -16034), pick(2, 102)])
+    const incoming = snap([pick(1, EMPTY), pick(2, EMPTY)])
+    expect(mapEspnPicks(mergeEspnSnapshots(cached, incoming)).map((p) => p.playerId).sort())
+      .toEqual(['-16034', '102'])
+  })
+
+  it('passes the incoming snapshot through when there is nothing cached', () => {
+    const incoming = snap([pick(1, 101)])
+    expect(mergeEspnSnapshots(null, incoming)).toBe(incoming)
   })
 })

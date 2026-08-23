@@ -47,6 +47,23 @@ describe('ESPN app bridge rehydration', () => {
     )
   })
 
+  it('asks the extension to refresh a league tab and come back', async () => {
+    const post = vi.spyOn(window, 'postMessage')
+    const { requestOpenEspn } = await import('./bridge')
+
+    requestOpenEspn({ leagueId: '123', season: '2026', teamId: '7', page: 'team', returnToApp: true })
+
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'draft-assistant-app',
+        type: 'OPEN_ESPN',
+        leagueId: '123',
+        returnToApp: true,
+      }),
+      '*',
+    )
+  })
+
   it('explicitly asks the extension to resend its stored snapshot', async () => {
     const post = vi.spyOn(window, 'postMessage')
     const { requestEspnSnapshot } = await import('./bridge')

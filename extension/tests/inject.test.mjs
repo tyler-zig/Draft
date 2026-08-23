@@ -25,7 +25,17 @@ const fatPlayer = (id) => ({
   },
 })
 
-function run({ picksByCall, withWebSocket = false }) {
+function stubDocument(extra = {}) {
+  return {
+    cookie: extra.cookie ?? 'SWID=abc',
+    referrer: extra.referrer ?? '',
+    querySelector: extra.querySelector ?? (() => null),
+    querySelectorAll: extra.querySelectorAll ?? (() => []),
+    ...extra,
+  }
+}
+
+function run({ picksByCall, withWebSocket = false, document: doc, pickTimeout = 90 }) {
   const posted = []
   const messageListeners = []
   const sockets = []
@@ -52,7 +62,7 @@ function run({ picksByCall, withWebSocket = false }) {
     console, URL, URLSearchParams, Date, JSON, Math, Buffer, Error,
     setTimeout, clearTimeout,
     location: { href: 'https://fantasy.espn.com/football/draft?leagueId=123&seasonId=2026', pathname: '/football/draft', origin: 'https://fantasy.espn.com' },
-    document: { cookie: 'SWID=abc', querySelectorAll: () => [] },
+    document: doc ?? stubDocument(),
     history: { pushState() {}, replaceState() {} },
     fetch: async (url) => {
       const isPlayers = String(url).includes('kona_player_info')
@@ -64,7 +74,10 @@ function run({ picksByCall, withWebSocket = false }) {
       return {
         ok: true, status: 200,
         json: async () => ({
-          settings: { scoringSettings: { scoringItems: [{ statId: 53, points: 1 }] } },
+          settings: {
+            scoringSettings: { scoringItems: [{ statId: 53, points: 1 }] },
+            draftSettings: { pickTimeout },
+          },
           teams: [{ id: 1 }, { id: 2 }],
           draftDetail: { drafted: false, inProgress: true, picks },
         }),
@@ -74,7 +87,7 @@ function run({ picksByCall, withWebSocket = false }) {
   ctx.window = {
     postMessage: (msg) => { if (msg?.source === 'draft-assistant-espn-page') posted.push(msg) },
     addEventListener: (type, fn) => { if (type === 'message') messageListeners.push(fn) },
-    setInterval: (fn) => { poll = fn; return 1 },
+    setInterval: (fn) => { if (!poll) poll = fn; return 1 },
     clearInterval: () => {},
     setTimeout,
   }
@@ -206,7 +219,7 @@ console.log('\npractice draft: mRoster 401 falls back like a 400')
       pathname: '/football/draft',
       origin: 'https://fantasy.espn.com',
     },
-    document: { cookie: '', querySelectorAll: () => [] },
+    document: stubDocument({ cookie: '' }),
     history: { pushState() {}, replaceState() {} },
     fetch: async (url) => {
       const href = String(url)
@@ -250,7 +263,7 @@ console.log('\npractice draft: mRoster failure falls back and tags isPractice')
     console, URL, URLSearchParams, Date, JSON, Math, Buffer, Error,
     setTimeout, clearTimeout,
     location: { href: 'https://fantasy.espn.com/football/draft?leagueId=999&seasonId=2026', pathname: '/football/draft', origin: 'https://fantasy.espn.com' },
-    document: { cookie: 'SWID=abc', querySelectorAll: () => [] },
+    document: stubDocument(),
     history: { pushState() {}, replaceState() {} },
     fetch: async (url) => {
       const href = String(url)
@@ -293,7 +306,7 @@ console.log('\npractice draft: lobby origin survives a league API failure')
     console, URL, URLSearchParams, Date, JSON, Math, Buffer, Error,
     setTimeout, clearTimeout,
     location: { href: 'https://fantasy.espn.com/football/draft?leagueId=777&seasonId=2026', pathname: '/football/draft', origin: 'https://fantasy.espn.com' },
-    document: { cookie: '', referrer: 'https://fantasy.espn.com/football/mockdraftlobby', querySelectorAll: () => [] },
+    document: stubDocument({ cookie: '', referrer: 'https://fantasy.espn.com/football/mockdraftlobby' }),
     history: { pushState() {}, replaceState() {} },
     fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
   }
@@ -312,6 +325,47 @@ console.log('\npractice draft: lobby origin survives a league API failure')
   check('keeps the failed clone id', posted[0]?.leagueId === '777')
 }
 
+console.log('\nESPN websocket: CLOCK posts remaining seconds')
+{
+  const picks = [{ overallPickNumber: 1, playerId: 7 }]
+  const h = run({ picksByCall: [picks, picks, picks], withWebSocket: true })
+  await tick()
+  let now = Date.now()
+  h.ctx.Date.now = () => now
+  const socket = new h.ctx.window.WebSocket('wss://fantasydraft.espn.com/league/123')
+  socket.emit('message', 'CLOCK 87\n')
+  await tick()
+  const clock = h.posted.at(-1)?.clock
+  check('posts remaining seconds', clock?.remaining === 87, `got ${clock?.remaining}`)
+  check('posts an endsAt so the app can tick locally', typeof clock?.endsAt === 'number' && clock.endsAt > now)
+  const afterClock = h.posted.length
+  now += 1000
+  socket.emit('message', 'CLOCK 86\n')
+  await tick()
+  check('a one-second tick does not repost', h.posted.length === afterClock, `got ${h.posted.length}`)
+  socket.emit('message', 'PAUSED\n')
+  await tick()
+  check('PAUSED freezes the remaining time', h.posted.at(-1)?.clock?.paused === true && h.posted.at(-1)?.clock?.remaining === 86)
+}
+
+console.log('\nESPN draft room: DOM clock is scraped')
+{
+  const clockNode = { textContent: '1:23' }
+  const board = {
+    textContent: 'On the Clock 1:23',
+    querySelectorAll: (sel) => /clock/i.test(String(sel)) ? [clockNode] : [],
+    querySelector: () => null,
+  }
+  const h = run({
+    picksByCall: [[{ overallPickNumber: 1, playerId: 7 }]],
+    document: stubDocument({
+      querySelector: (sel) => String(sel).includes('draftContainer') ? board : null,
+    }),
+  })
+  await tick()
+  check('reads M:SS off the draft-room clock', h.posted[0]?.clock?.remaining === 83, `got ${h.posted[0]?.clock?.remaining}`)
+}
+
 console.log('\nRESEND_PLAYERS forces a full repost')
 {
   const picks = [{ overallPickNumber: 1, playerId: 7 }]
@@ -324,6 +378,79 @@ console.log('\nRESEND_PLAYERS forces a full repost')
   await tick()
   check('reposts after the request', posted.length === before + 1, `got ${posted.length}`)
   check('repost carries players again', Array.isArray(posted.at(-1)?.players))
+}
+
+console.log('\npick history backfills picks the API has not published')
+{
+  // ESPN's read model publishes only keepers while a draft is live: every
+  // unmade row stays playerId -1. The draft room still renders the full board,
+  // so the history scrape is what recovers picks made while the tab was
+  // disconnected.
+  const cell = (text) => ({ textContent: text })
+  const row = (overall, playerId, teamLabel) => {
+    const img = { getAttribute: (n) => (n === 'src' ? 'https://a.espncdn.com/i/headshots/nfl/players/full/' + playerId + '.png' : null) }
+    const cells = [cell(String(overall)), cell('Someone'), cell(teamLabel)]
+    return {
+      querySelector: (sel) => (sel === 'img' ? img : null),
+      querySelectorAll: (sel) => (sel === '[class*="cellContent"]' ? cells : []),
+    }
+  }
+  const table = (round, rows) => ({
+    querySelector: (sel) => (sel === '[class*="caption"]' ? { textContent: 'Round ' + round } : null),
+    querySelectorAll: (sel) => (sel === '[class*="rowWrapper"]' ? rows : []),
+  })
+  const tables = [
+    table(1, [row(1, 4430737, 'Alpha'), row(2, 3121422, 'Beta')]),
+    table(2, [row(3, 4567750, 'Alpha'), row(4, 4870808, 'Beta')]),
+  ]
+
+  const posted = []
+  const ctx = {
+    console, URL, URLSearchParams, Date, JSON, Math, Buffer, Error, setTimeout, clearTimeout,
+    location: { href: 'https://fantasy.espn.com/football/draft?leagueId=123&seasonId=2026', pathname: '/football/draft', origin: 'https://fantasy.espn.com' },
+    document: stubDocument({
+      querySelectorAll: (sel) => (sel === '.pick-history-table' ? tables : []),
+    }),
+    history: { pushState() {}, replaceState() {} },
+    fetch: async (url) => {
+      if (String(url).includes('kona_player_info')) {
+        return { ok: true, status: 200, json: async () => ({ players: [fatPlayer(1)] }) }
+      }
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          settings: { size: 2, scoringSettings: { scoringItems: [] }, draftSettings: { pickTimeout: 90 } },
+          teams: [{ id: 21, name: 'Alpha' }, { id: 7, name: 'Beta' }],
+          draftDetail: { drafted: false, inProgress: true, picks: [
+            { overallPickNumber: 1, playerId: 4430737, teamId: 21, roundId: 1, roundPickNumber: 1, keeper: true },
+            { overallPickNumber: 2, playerId: -1, teamId: 7, roundId: 1, roundPickNumber: 2 },
+            { overallPickNumber: 3, playerId: -1, teamId: 21, roundId: 2, roundPickNumber: 1 },
+            { overallPickNumber: 4, playerId: -1, teamId: 7, roundId: 2, roundPickNumber: 2 },
+          ] },
+        }),
+      }
+    },
+  }
+  ctx.window = {
+    postMessage: (msg) => { if (msg?.source === 'draft-assistant-espn-page') posted.push(msg) },
+    addEventListener: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+    setTimeout,
+  }
+  ctx.window.window = ctx.window
+  vm.createContext(ctx)
+  vm.runInContext(src, ctx)
+  await tick()
+
+  const picks = posted[0]?.league?.draftDetail?.picks ?? []
+  const real = picks.filter((p) => Number(p.playerId) > 0)
+  const byOverall = new Map(real.map((p) => [p.overallPickNumber, p]))
+  check('every scraped pick reaches the snapshot', real.length === 4, 'got ' + real.length)
+  check('no duplicate pick numbers', byOverall.size === real.length)
+  check('backfilled pick keeps its own team', byOverall.get(3)?.teamId === 21, JSON.stringify(byOverall.get(3)))
+  check('team is read from the row, not derived from the round', byOverall.get(4)?.teamId === 7, JSON.stringify(byOverall.get(4)))
+  check('the published keeper is not duplicated', real.filter((p) => Number(p.playerId) === 4430737).length === 1)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

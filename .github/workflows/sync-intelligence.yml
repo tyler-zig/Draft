@@ -3,9 +3,10 @@ name: Sync player intelligence
 # The nflverse historical rebuild is the one job in this pipeline that cannot
 # run on Supabase: Edge Functions cap CPU at 2s per request, and parsing one
 # season of play-by-play alone costs ~9s of CPU before any of the usage or
-# durability calculations run. Everything else -- rankings, ADP, the schedule
-# and matchup refresh, and the sharded read path -- is published by pg_cron
-# driving Edge Functions and needs nothing from here.
+# durability calculations run. Season projections live in sync-projections.yml
+# for the same reason (FantasySharks Crawl-delay: 60). Rankings, ADP, the
+# schedule and matchup refresh, and the sharded read path are published by
+# pg_cron driving Edge Functions and need nothing from here.
 
 on:
   schedule:

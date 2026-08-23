@@ -38,8 +38,10 @@ lerna-debug.log*
 # Generated ranking and player-intelligence snapshots
 /data/rankings/
 /data/intelligence/
+/data/projections/
 /public/rankings/
 /public/intelligence/
+/public/projections/
 
 # Local Supabase CLI state
 /supabase/.branches/

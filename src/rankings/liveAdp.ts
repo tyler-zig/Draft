@@ -172,6 +172,22 @@ export function applyLiveAdp(
   })
 }
 
+/**
+ * FantasyPros vs = window − now. Positive means drafted earlier than that
+ * window (Texans 114.9 → 105.6 is +9.3). Same arrows the Player Intelligence
+ * market panel already prints.
+ */
+export function formatLiveAdpChange(delta: number | null | undefined) {
+  if (delta == null || !Number.isFinite(delta)) return '—'
+  if (delta === 0) return '0.0'
+  return `${delta > 0 ? '↑ ' : '↓ '}${Math.abs(delta).toFixed(1)}`
+}
+
+export function liveAdpChangeTone(delta: number | null | undefined) {
+  if (delta == null || !Number.isFinite(delta) || delta === 0) return ''
+  return delta > 0 ? 'cc-up' : 'cc-down'
+}
+
 export const liveAdpQuery = {
   queryKey: ['rankings', 'adp-latest'] as const,
   queryFn: ({ signal }: { signal?: AbortSignal }) => fetchLiveAdpSnapshot(signal),

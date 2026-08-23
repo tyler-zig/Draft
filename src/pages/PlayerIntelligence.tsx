@@ -22,7 +22,9 @@ import { InjuryDot } from '../components/InjuryDot'
 import { PlayerScheduleGrid } from '../components/PlayerSchedule'
 import { MarketHistory } from '../components/MarketHistory'
 import { AccountButton } from '../components/AccountButton'
+import type { ProjectionSourceLine } from '../api/collectedProjections'
 import { PlayerPhoto } from '../components/PlayerPhoto'
+import { ProjectionHover } from '../components/ProjectionHover'
 import { PlayerTwitterLink } from '../components/PlayerTwitterLink'
 import { RankingsSheet } from '../components/RankingsSheet'
 import { Select } from '../components/Select'
@@ -236,7 +238,7 @@ export function PlayerIntelligence() {
             <thead><tr>
               <th>Rank</th><th>Player</th><th>Pos</th><th>Tier</th><th>ADP</th>
               <th title="FantasyPros Real-Time ADP for this league's scoring. Falls back to Draft Wizard mock-draft ADP for league size when that board is missing. Checked every 15 minutes.">Live ADP</th>
-              <th title="Points above a replacement-level player at the same position, using the Sleeper/RotoWire season projection.">VORP</th>
+              <th title="Points above a replacement-level player at the same position, using the consensus season projection.">VORP</th>
               <th title="Best-to-worst expert rank from collected boards and ranking history. Independent of which sources are enabled for consensus.">Range</th>
               <th title="Movement from FantasyPros Last 7 / Last 1 rolling ADP, then collected snapshots once those exist. Positive means the player is being drafted earlier.">Trend</th>
               <th>Queue</th>
@@ -269,7 +271,7 @@ export function PlayerIntelligence() {
         <section className="pi-detail-hero"><div className="pi-detail-kicker"><span className="pi-eyebrow">Selected player</span><span className={injuryTone(selected.injuryStatus) === 'out' ? 'down' : selected.injuryStatus ? 'warn' : 'up'}>● {selected.injuryStatus ?? 'Active'}</span></div><div className="pi-detail-id"><PlayerPhoto player={selected} variant="plain" /><div><h2>{selected.fullName}</h2><p><span className={`pi-pos pi-${selected.position.toLowerCase()}`}>{selected.position}</span>{selected.team ?? 'Free Agent'} · Bye {byeWeek ?? '—'} <PlayerTwitterLink player={selected} className="pi-x" /></p></div></div><div className="pi-bio"><Bio label="Bye" value={byeWeek} /><Bio label="Height" value={selected.height} /><Bio label="Weight" value={selected.weight == null ? null : `${selected.weight} lbs`} /><Bio label="Age" value={selected.age} /></div><button type="button" className={isQueued ? 'pi-add queued' : 'pi-add'} onClick={() => toggleQueue()}>{isQueued ? '✓ In draft queue' : '＋ Add to draft queue'}</button></section>
         <DetailPanel panel="market" id="market" title="Market & consensus" meta={`${contextLabel} · ${rankFacts.sources.length} sources`} collapsed={collapsedPanels.has('market')} onToggle={togglePanel}><div className="pi-market-grid"><Value label="Consensus" value={formatRank(consensus)} /><Value label="ADP" value={formatRank(selected.adp)} /><Value label="Live ADP" value={formatRank(selected.liveAdp)} accent /><Value label="vs 1 day" value={selected.liveAdpVsLastOne == null ? '—' : formatTrend(selected.liveAdpVsLastOne)} /><Value label="vs 7 days" value={selected.liveAdpVsLastSeven == null ? '—' : formatTrend(selected.liveAdpVsLastSeven)} /><Value label="Range" value={selected.rankLow == null ? '—' : `${formatRank(selected.rankLow)} – ${formatRank(selected.rankHigh)}`} /></div><div className="pi-market-sources">{rankFacts.sources.length ? rankFacts.sources.map((source) => <div key={source.id} title={`Updated ${formatDate(source.fetchedAt)}`}><span>{source.label}: {formatRank(source.rank)}</span></div>) : <p>No enabled {scoringLabel(scoringType)} source reports this player.</p>}</div></DetailPanel>
         <DetailPanel panel="news" title="Latest news" meta={newsQuery.data?.news.length ? `${newsQuery.data.news.length} update${newsQuery.data.news.length === 1 ? '' : 's'}` : newsQuery.isPending ? 'Loading' : 'Unavailable'} collapsed={collapsedPanels.has('news')} onToggle={togglePanel}><NewsFeed items={newsQuery.data?.news ?? []} loading={newsQuery.isPending} message={newsQuery.data?.newsMessage ?? null} /></DetailPanel>
-        <DetailPanel panel="projection" title="Projection & historical output" meta={projection ? `${contextLabel} · ${projection.source}` : contextLabel} collapsed={collapsedPanels.has('projection')} onToggle={togglePanel}><div className="pi-projection-grid"><ProjectionMetric label="Projected points" value={projection?.points} pending={projectionPending} /><ProjectionMetric label="VORP" value={selected.vorp} pending={projectionPending} signed /><ProjectionMetric label={selected.position === 'QB' ? 'Projected attempts' : 'Projected carries'} value={selected.position === 'QB' ? projection?.passAttempts : projection?.rushAttempts} pending={projectionPending} /><ProjectionMetric label={receivingLabel} value={receivingValue} pending={projectionPending} /><ProjectionMetric label="Projected PPG" value={projection?.ppg} pending={projectionPending} /></div>{latestHistorical ? <HistoricalOutput season={latestHistorical} title={historyTitle} scoringType={scoringType} receptionOverride={receptionOverride} /> : <Unavailable title="Historical output unavailable" detail={historicalQuery.data?.message ?? 'Loading nflverse weekly statistics…'} />}<p className="pi-honesty"><b>{projection ? `${projection.season} season projection` : 'Season projection unavailable'}</b>{projection ? `${projection.source}${projection.updatedAt ? ` · updated ${formatDate(projection.updatedAt)}` : ''}. VORP is points above a replacement-level ${selected.position} in ${currentDraft?.slots ? 'this league' : 'a standard 12-team lineup'}. The weekly chart is observed ${scoringLabel(scoringType)} history, not a weekly forecast.` : `No Sleeper season projection is published for this player. The weekly chart is observed ${scoringLabel(scoringType)} history, not a forecast.`}</p></DetailPanel>
+        <DetailPanel panel="projection" title="Projection & historical output" meta={projection ? `${contextLabel} · ${projection.source}` : contextLabel} collapsed={collapsedPanels.has('projection')} onToggle={togglePanel}><div className="pi-projection-grid"><ProjectionMetric label="Projected points" value={projection?.points} pending={projectionPending} breakdown={projection?.breakdown} /><ProjectionMetric label="VORP" value={selected.vorp} pending={projectionPending} signed /><ProjectionMetric label={selected.position === 'QB' ? 'Projected attempts' : 'Projected carries'} value={selected.position === 'QB' ? projection?.passAttempts : projection?.rushAttempts} pending={projectionPending} breakdown={projection?.breakdown} pick={(line) => selected.position === 'QB' ? line.stats.pass_att : line.stats.rush_att} /><ProjectionMetric label={receivingLabel} value={receivingValue} pending={projectionPending} breakdown={projection?.breakdown} pick={(line) => projection?.targets != null ? line.stats.rec_tgt : line.stats.rec} /><ProjectionMetric label="Projected PPG" value={projection?.ppg} pending={projectionPending} breakdown={projection?.breakdown} pick={(line) => line.points != null && line.games ? line.points / line.games : null} /></div>{latestHistorical ? <HistoricalOutput season={latestHistorical} title={historyTitle} scoringType={scoringType} receptionOverride={receptionOverride} /> : <Unavailable title="Historical output unavailable" detail={historicalQuery.data?.message ?? 'Loading nflverse weekly statistics…'} />}<p className="pi-honesty"><b>{projection ? `${projection.season} season projection` : 'Season projection unavailable'}</b>{projection ? `${projection.source}${projection.updatedAt ? ` · updated ${formatDate(projection.updatedAt)}` : ''}. Hover a projected stat for each source's line. VORP is points above a replacement-level ${selected.position} in ${currentDraft?.slots ? 'this league' : 'a standard 12-team lineup'}. The weekly chart is observed ${scoringLabel(scoringType)} history, not a weekly forecast.` : `No season projection is published for this player. The weekly chart is observed ${scoringLabel(scoringType)} history, not a forecast.`}</p></DetailPanel>
         <HistoricalLibrary seasons={historicalSeasons} scoringType={scoringType} receptionOverride={receptionOverride} loading={historicalQuery.isLoading} message={historicalQuery.data?.message} collapsed={collapsedPanels.has('historical')} onToggle={togglePanel} onOpen={() => setHistoryOpen(true)} />
         <DetailPanel panel="trend" title="Market trend" meta={`${trend.length} observations`} collapsed={collapsedPanels.has('trend')} onToggle={togglePanel}><MarketHistory history={selectedHistory} loading={historyCatalogQuery.isLoading} live={livePoint(selected)} /></DetailPanel>
         <DetailPanel panel="usage" id="usage" title="Usage & durability" meta="nflverse + Sleeper" collapsed={collapsedPanels.has('usage')} onToggle={togglePanel}>{latestHistorical ? <><div className="pi-usage"><UsageMetric label="Touch share" value={latestHistorical.usage.touchShare} /><UsageMetric label="Red-zone share" value={latestHistorical.usage.redZoneTouchShare} /><UsageMetric label="Snap share" value={latestHistorical.usage.snapShare} /><Value label="Opportunities" value={String(latestHistorical.usage.opportunities)} /></div><div className="pi-durability"><div><span><small>Current status</small>{selected.injuryStatus ?? 'No injury designation'}</span><b className={injuryTone(selected.injuryStatus) === 'out' ? 'down' : selected.injuryStatus ? 'warn' : 'up'}>{injuryTone(selected.injuryStatus) === 'out' ? selected.injuryStatus : selected.injuryStatus ? 'Monitor' : 'Active'}</b></div><div><span><small>Games missed ({historicalSeasons.map((season) => season.season).join('–')})</small>{historicalSeasons.map((season) => `${season.season}: ${season.durability.gamesMissed}`).join(' · ')}</span><b>{gamesMissed}</b></div><p>Byes and DEV/CUT roster weeks are excluded. Injury risk is not inferred.</p></div></> : <Unavailable title="Usage unavailable" detail={historicalQuery.data?.message ?? 'Loading nflverse usage data…'} />}</DetailPanel>
@@ -299,11 +301,34 @@ function DetailPanel({ panel, title, meta, id, collapsed, onToggle, children }: 
   </section>
 }
 function UnavailableMetric({ label }: { label: string }) { return <div title="No Sleeper season projection for this player"><small>{label}</small><b>—</b><span>UNAVAILABLE</span></div> }
-function ProjectionMetric({ label, value, pending = false, signed = false }: { label: string; value: number | null | undefined; pending?: boolean; signed?: boolean }) {
+function ProjectionMetric({
+  label,
+  value,
+  pending = false,
+  signed = false,
+  breakdown,
+  pick,
+}: {
+  label: string
+  value: number | null | undefined
+  pending?: boolean
+  signed?: boolean
+  breakdown?: ProjectionSourceLine[]
+  pick?: (line: ProjectionSourceLine) => number | null | undefined
+}) {
   if (pending) return <div><small>{label}</small><b>—</b><span>LOADING</span></div>
   if (value == null) return <UnavailableMetric label={label} />
-  const shown = signed ? formatVorp(value) : shownStat(value, Number.isInteger(value) ? 0 : 1)
-  return <div className="available" title={signed ? 'Points above a replacement-level player at this position' : 'Published season projection'}><small>{label}</small><b className={signed ? (value >= 0 ? 'up' : 'down') : undefined}>{shown}</b><span>{signed ? 'VS REPLACEMENT' : 'PROJECTED'}</span></div>
+  return (
+    <div className="available" title={signed ? 'Points above a replacement-level player at this position' : undefined}>
+      <small>{label}</small>
+      <b className={signed ? (value >= 0 ? 'up' : 'down') : undefined}>
+        {signed
+          ? formatVorp(value)
+          : <ProjectionHover value={value} breakdown={breakdown} pick={pick} label={label} />}
+      </b>
+      <span>{signed ? 'VS REPLACEMENT' : 'PROJECTED'}</span>
+    </div>
+  )
 }
 function UsageMetric({ label, value }: { label: string; value: number | null }) { return <Value label={label} value={value == null ? '—' : `${(value * 100).toFixed(1)}%`} /> }
 function ago(at: number) { const minutes = Math.max(0, Math.floor((Date.now() - at) / 60_000)); return minutes < 1 ? 'Now' : minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h` }

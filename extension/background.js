@@ -112,7 +112,42 @@ async function focusWindow(windowId) {
   }
 }
 
-async function openEspn(opts) {
+function samePage(tabUrl, targetUrl) {
+  try {
+    const left = new URL(tabUrl)
+    const right = new URL(targetUrl)
+    return left.origin === right.origin && left.pathname === right.pathname && left.search === right.search
+  } catch {
+    return tabUrl === targetUrl
+  }
+}
+
+async function showAndRefreshTab(existing, url) {
+  if (existing?.id) {
+    if (samePage(existing.url, url)) {
+      await chrome.tabs.update(existing.id, { active: true })
+      await focusWindow(existing.windowId)
+      await chrome.tabs.reload(existing.id)
+      return
+    }
+    await chrome.tabs.update(existing.id, { active: true, url })
+    await focusWindow(existing.windowId)
+    return
+  }
+  await chrome.tabs.create({ url, active: true })
+}
+
+async function returnToAppTab(sender) {
+  if (!sender?.tab?.id) return
+  try {
+    await chrome.tabs.update(sender.tab.id, { active: true })
+    await focusWindow(sender.tab.windowId)
+  } catch {
+    /* the app tab may have closed while the league page loaded */
+  }
+}
+
+async function openEspn(opts, sender) {
   const url = espnUrl(opts || {})
   const tabs = await chrome.tabs.query({ url: 'https://fantasy.espn.com/*' })
   const lasting = tabs.filter((tab) => tab.url && !isEspnTransientTab(tab.url))
@@ -122,8 +157,8 @@ async function openEspn(opts) {
       (tab) => tab.url && tab.url.includes(`leagueId=${leagueId}`),
     )
     if (existing?.id) {
-      await chrome.tabs.update(existing.id, { active: true, url })
-      await focusWindow(existing.windowId)
+      await showAndRefreshTab(existing, url)
+      if (opts?.returnToApp) await returnToAppTab(sender)
       return { ok: true }
     }
   }
@@ -135,41 +170,28 @@ async function openEspn(opts) {
       if (!tab.url) return false
       try { return new URL(tab.url).pathname === requestedPath } catch { return tab.url.includes(requestedPath) }
     })
-    if (existing?.id) {
-      await chrome.tabs.update(existing.id, { active: true, url })
-      await focusWindow(existing.windowId)
-      return { ok: true }
-    }
-    await chrome.tabs.create({ url })
+    await showAndRefreshTab(existing, url)
+    if (opts?.returnToApp) await returnToAppTab(sender)
     return { ok: true }
   }
-  // Never reload a dead practice/draft tab — that keeps the app on the clone.
+  // Never reuse a dead practice/draft tab — that keeps the app on the clone.
   const existing = lasting.find(
     (tab) => tab.url && tab.url.includes('fantasy.espn.com/football'),
   )
-  if (existing?.id) {
-    await chrome.tabs.update(existing.id, { active: true, url })
-    await focusWindow(existing.windowId)
-    return { ok: true }
-  }
-  await chrome.tabs.create({ url })
+  await showAndRefreshTab(existing, url)
+  if (opts?.returnToApp) await returnToAppTab(sender)
   return { ok: true }
 }
 
-async function openSite(provider, opts) {
+async function openSite(provider, opts, sender) {
   const url = siteUrl(provider, opts || {})
   const tabs = await chrome.tabs.query({ url: SITE_QUERY[provider] })
   const leagueId = opts?.leagueId
   const match = leagueId
     ? tabs.find((tab) => tab.url && (tab.url.includes(`/f1/${leagueId}`) || tab.url.includes(`/league/${leagueId}`) || tab.url.includes(`leagueId=${leagueId}`)))
     : tabs[0]
-  if (match?.id) {
-    await chrome.tabs.update(match.id, { active: true })
-    await focusWindow(match.windowId)
-    await chrome.tabs.reload(match.id)
-    return { ok: true }
-  }
-  await chrome.tabs.create({ url })
+  await showAndRefreshTab(match, url)
+  if (opts?.returnToApp) await returnToAppTab(sender)
   return { ok: true }
 }
 
@@ -426,7 +448,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RANKING_ALARM) void scrapeOpenRankingTabs()
 })
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'ESPN_SNAPSHOT' && message.payload) {
     saveSnapshot(message.payload)
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -470,7 +492,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       ? clearIgnoredPractice()
       : Promise.resolve()
     resetIgnoredPractice
-      .then(() => openEspn(message))
+      .then(() => openEspn(message, sender))
       .then(sendResponse)
       .catch(() => sendResponse({ ok: false }))
     return true
@@ -487,7 +509,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
   if (message?.type === 'OPEN_SITE' && (message.provider === 'yahoo' || message.provider === 'nfl')) {
-    openSite(message.provider, message).then(sendResponse).catch(() => sendResponse({ ok: false }))
+    openSite(message.provider, message, sender).then(sendResponse).catch(() => sendResponse({ ok: false }))
     return true
   }
   if (message?.type === 'PUBLISH_ESPN_SUGGESTIONS') {

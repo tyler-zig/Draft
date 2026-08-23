@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Draft Assistant Sync",
-  "version": "1.6.9",
+  "version": "1.7.0",
   "description": "Syncs your ESPN, Yahoo, and NFL.com fantasy football drafts into Draft Assistant.",
   "action": {
     "default_title": "Draft Assistant",

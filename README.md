@@ -55,12 +55,15 @@ room and use the *Rankings collector* card to pick sources, set per-host
 concurrency, run a collection with a live log, and load the result into the
 consensus list.
 
-This is wired through dev-server middleware (`scripts/vite-scraper-plugin.mjs`),
-the same arrangement as the Sleeper proxy: the browser cannot spawn a Node
-process, and could not fetch those origins directly anyway since none of them
-send CORS headers. The endpoint therefore exists only under `npm run dev` and
+This is wired through dev-server middleware (`scripts/vite-scraper-plugin.mjs`).
+The browser cannot spawn a Node process, and those ranking hosts do not send
+CORS headers, so the collector exists only under `npm run dev` and
 `npm run preview`. A static production build has no server attached, and the
 card says so instead of offering a button that cannot work.
+
+Sleeper lookups are different: the app calls `/sleeper/...` so the browser
+never talks to `api.sleeper.app` directly. Vite proxies that path locally;
+`vercel.json` rewrites it to Sleeper on the hosted app.
 
 Only validated fields reach the CLI -- source names are checked against a fixed
 list and concurrency is clamped -- so the endpoint cannot be talked into
@@ -112,6 +115,33 @@ can enable and weigh them individually.
 When the real-time ADP board is collected, it is also written to its own
 `adp-latest.json` beside `latest.json` (and mirrored to `public/rankings/`), so
 the standalone ADP cron job and the broad snapshot can move independently.
+
+## Season projection collection
+
+`npm run scrape:projections` collects public season-long stat lines from CBS,
+ESPN, and FantasySharks, averages each stat across the sources that published
+it, and writes `data/projections/latest.json` plus a `public/projections/`
+copy. The app blends that consensus with the live Sleeper/RotoWire board and
+scores the result to the connected league, which is what VORP reads.
+
+| Source | What it gives | Volume |
+| --- | --- | --- |
+| FantasySharks | Position CSVs with stable player ids | ~580 rows over QB/RB/WR/TE/K/DEF |
+| CBS Sports | Server-rendered PPR tables (volume is the same as standard) | ~450 rows over six positions |
+| ESPN | Default-league `kona_player_info` season totals, keyed by ESPN id | ~800 rows with season projections |
+
+There is no login or paywall bypass. FantasySharks publishes `Crawl-delay: 60`,
+so a full run spends several minutes spacing those six CSVs. That is above the
+Edge Function wall-clock cap, which is why the scheduled path is GitHub
+Actions (`.github/workflows/sync-projections.yml`, `41 */6 * * *` UTC) rather
+than `pg_cron`. `workflow_dispatch` accepts optional `season` and `only`
+inputs. `npm run supabase:cron:setup` is unchanged.
+
+A source that fails is recorded under `failures` and does not abort the others.
+Thin boards fail loudly. `--only=cbs,espn` skips the slow FantasySharks host.
+
+The app prefers the hosted `projections-latest` snapshot, then Storage, then
+the static file. A missing artifact leaves Sleeper/RotoWire as the only source.
 
 ## Player intelligence sync
 

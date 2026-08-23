@@ -37,6 +37,7 @@ const bucket = process.env.SUPABASE_DATA_BUCKET || process.env.VITE_SUPABASE_DAT
  * still an error, because then uploading is the whole point of the command.
  */
 const optional = process.argv.includes('--if-configured')
+const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice(7).split(',').map((id) => id.trim()).filter(Boolean) ?? []
 
 if (!url || !serviceKey) {
   const message = 'Set SUPABASE_URL (or VITE_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY in the shell or .env.local before uploading artifacts.'
@@ -56,10 +57,24 @@ const artifacts = [
   ['player-intelligence', 'public/intelligence/latest.json', 'intelligence/latest.json'],
   [null, 'public/intelligence/schedule.json', 'intelligence/schedule.json'],
   ['player-twitter', 'public/players/twitter.json', 'players/twitter.json'],
+  ['projections-latest', 'public/projections/latest.json', 'projections/latest.json'],
 ]
+
+function wanted(kind, objectPath) {
+  if (!only.length) return true
+  return only.includes(kind) || only.includes(objectPath)
+}
+
+function adpHasTrendWindows(payload) {
+  const sets = Array.isArray(payload?.sets) ? payload.sets : []
+  return sets.some((set) => String(set?.id ?? '').startsWith('fantasypros-rtadp')
+    && Array.isArray(set.rows)
+    && set.rows.some((row) => row?.adpLastOne != null || row?.adpVsLastOne != null))
+}
 
 let uploaded = 0
 for (const [kind, source, objectPath] of artifacts) {
+  if (!wanted(kind, objectPath)) continue
   const file = resolve(source)
   let body
   let info
@@ -70,6 +85,10 @@ for (const [kind, source, objectPath] of artifacts) {
     throw error
   }
   const payload = JSON.parse(body.toString('utf8'))
+  if (kind === 'adp-latest' && !adpHasTrendWindows(payload)) {
+    console.warn(`Skipping ${source}: FantasyPros rows have no Last 1 / Last 7 windows`)
+    continue
+  }
   const generated = payload.generatedAt ?? payload.fetchedAt ?? info.mtimeMs
   const generatedAt = typeof generated === 'number' ? new Date(generated).toISOString() : new Date(generated).toISOString()
   const schemaVersion = Number(payload.schemaVersion ?? 1)
@@ -86,7 +105,7 @@ for (const [kind, source, objectPath] of artifacts) {
     })
     if (metadataError) throw new Error(`Metadata ${kind}: ${metadataError.message}`)
   }
-  if (kind && objectPath.startsWith('rankings/')) {
+  if (kind && (objectPath.startsWith('rankings/') || kind === 'projections-latest')) {
     const { error: snapshotError } = await client.from('ranking_snapshots').upsert({
       kind,
       schema_version: schemaVersion,
@@ -138,7 +157,9 @@ async function uploadPlayerShards() {
   return names.length
 }
 
-uploaded += await uploadPlayerShards()
+if (!only.length || only.includes('player-intelligence') || only.includes('intelligence/players')) {
+  uploaded += await uploadPlayerShards()
+}
 
 if (!uploaded) throw new Error('No generated artifacts were found. Run the ranking/intelligence sync scripts first.')
 console.log(`Uploaded ${uploaded} artifact${uploaded === 1 ? '' : 's'}.`)

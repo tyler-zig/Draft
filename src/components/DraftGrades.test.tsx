@@ -31,37 +31,42 @@ function pick(playerId: string, draftSlot: number, pickNo: number): DraftPick {
   return { playerId, pickedByUserId: null, rosterId: null, round: 1, draftSlot, pickNo, isKeeper: false, meta: null }
 }
 
-// Four teams, descending projected points so the default sort is visible.
 const players = [
   player({ id: 'p1', position: 'RB', adp: 1, searchRank: 1, projectedPoints: 15 }),
   player({ id: 'p2', position: 'RB', adp: 6, searchRank: 6, projectedPoints: 14 }),
   player({ id: 'p3', position: 'RB', adp: 7, searchRank: 7, projectedPoints: 13 }),
   player({ id: 'p4', position: 'RB', adp: 8, searchRank: 8, projectedPoints: 12 }),
 ]
-const picks = [1, 2, 3, 4].map((slot) => pick(`p${slot}`, slot, 5))
+const picks = [1, 2, 3, 4].map((slotNo) => pick(`p${slotNo}`, slotNo, 5))
 
-const dataRows = () => screen.getAllByRole('row').slice(1)
+const teamRows = () => screen.getAllByRole('button', { name: /details$/ })
 
 describe('DraftGrades', () => {
   it('renders every drafted team and highlights yours', () => {
     render(<DraftGrades session={session()} picks={picks} players={players} highlightedSlot={1} />)
-    expect(dataRows()).toHaveLength(4)
-    const mine = screen.getByText('Team 1').closest('tr')
+    expect(teamRows()).toHaveLength(4)
+    const mine = screen.getByRole('button', { name: 'Team 1 details' })
     expect(mine).toHaveClass('cc-grades-you')
     expect(mine).toHaveTextContent('YOU')
-    // Team 1 landed ADP-1 at pick 5: four picks of value.
     expect(mine).toHaveTextContent('+4')
-    // A grade exists once four teams have a pick.
-    expect(screen.getAllByText(/^[A-F]$/)).toHaveLength(4)
+    expect(screen.getByRole('heading', { name: /Team 1/ })).toBeInTheDocument()
+    expect(screen.queryAllByText(/^[A-F]$/)).toHaveLength(0)
   })
 
   it('sorts by lineup points and flips on a second header click', async () => {
     const user = userEvent.setup()
     render(<DraftGrades session={session()} picks={picks} players={players} />)
-    // Default: points, high to low.
-    expect(dataRows()[0]).toHaveTextContent('Team 1')
+    expect(teamRows()[0]).toHaveTextContent('Team 1')
     await user.click(screen.getByRole('button', { name: 'Sort by Lineup pts' }))
-    expect(dataRows()[0]).toHaveTextContent('Team 4')
+    expect(teamRows()[0]).toHaveTextContent('Team 4')
+  })
+
+  it('expands a team to show its starting lineup', async () => {
+    const user = userEvent.setup()
+    render(<DraftGrades session={session()} picks={picks} players={players} />)
+    await user.click(screen.getByRole('button', { name: 'Team 2 details' }))
+    expect(screen.getByRole('button', { name: 'Team 2 details' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getAllByText('p2').length).toBeGreaterThan(0)
   })
 
   it('shows the note and an empty state with no picks', () => {

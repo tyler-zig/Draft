@@ -1,5 +1,5 @@
 import type { EspnSnapshot } from './mapEspn'
-import { ESPN_APP_SOURCE, ESPN_BRIDGE_SOURCE, isEspnPracticeSnapshot } from './mapEspn'
+import { ESPN_APP_SOURCE, ESPN_BRIDGE_SOURCE, isEspnPracticeSnapshot, mergeEspnSnapshots } from './mapEspn'
 
 export type EspnSuggestionRec = {
   id: string
@@ -201,6 +201,8 @@ export function requestOpenEspn(opts?: {
   teamId?: string
   page?: 'home' | 'team' | 'draft' | 'practice'
   url?: string
+  /** Refresh the league tab, then come back so the draft room can ingest it. */
+  returnToApp?: boolean
 }) {
   const season = opts?.season ?? CURRENT_SEASON
   const leagueId = opts?.leagueId?.trim()
@@ -234,6 +236,7 @@ export function requestOpenEspn(opts?: {
       season,
       teamId,
       url,
+      returnToApp: Boolean(opts?.returnToApp),
     },
     '*',
   )
@@ -255,6 +258,8 @@ export function ingestEspnBridgeMessage(data: unknown) {
   if (msg.source !== ESPN_BRIDGE_SOURCE) return
   installed = true
   if (msg.exitedPractice) {
+    // Leaving a practice room returns to the real league, so this is a
+    // different draft and merging would be wrong.
     snapshot = msg.snapshot ?? null
     if (snapshot?.league) cacheSnapshot(snapshot)
     hydrated = true
@@ -266,8 +271,11 @@ export function ingestEspnBridgeMessage(data: unknown) {
     // usable local snapshot. A real snapshot replaces and refreshes the cache.
     if (msg.snapshot) {
       if (msg.snapshot.league) {
-        snapshot = msg.snapshot
-        cacheSnapshot(msg.snapshot)
+        // Merged against what we already hold, so a snapshot taken while the
+        // draft tab was disconnected cannot wipe the board on a refresh.
+        const merged = mergeEspnSnapshots(snapshot ?? loadCachedSnapshot(), msg.snapshot)
+        snapshot = merged
+        cacheSnapshot(merged)
       } else if (msg.snapshot.error) {
         const home = loadCachedSnapshot()
         snapshot = home ?? msg.snapshot

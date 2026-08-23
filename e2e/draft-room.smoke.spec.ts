@@ -113,7 +113,7 @@ test('mock draft settings run a small mock to the grades report and restore defa
   // grades sheet opens itself as the mock report.
   const grades = page.getByRole('dialog', { name: 'Draft grades' })
   await expect(grades).toBeVisible({ timeout: 90_000 })
-  await expect(grades.locator('.cc-grades-table tbody tr')).toHaveCount(4)
+  await expect(grades.locator('.cc-grades-row')).toHaveCount(4)
   await page.getByRole('button', { name: 'Close Draft grades' }).click()
 
   // The demo engine is a module singleton shared by every page in this worker,

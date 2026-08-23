@@ -10,7 +10,7 @@ export type SourceGroup = 'rotowire' | 'fantasypros' | 'fantasypros-adp' | 'espn
 
 export const SOURCE_GROUPS: { id: SourceGroup; label: string; detail: string }[] = [
   { id: 'fantasypros', label: 'FantasyPros', detail: '~1,900 rows · 3 boards · ~100 experts' },
-  { id: 'fantasypros-adp', label: 'Live ADP', detail: '5 RT formats + Draft Wizard 8/10/12/14/16 × half/ppr/std/rookie' },
+  { id: 'fantasypros-adp', label: 'Real-Time ADP', detail: '5 RT formats + Draft Wizard 8/10/12/14/16 × half/ppr/std/rookie' },
   { id: 'rotowire', label: 'RotoWire', detail: '~700 rows · ~70 boards · ADP' },
   { id: 'espn', label: 'ESPN crosswalk', detail: '~4,500 player IDs · improves matching' },
 ]

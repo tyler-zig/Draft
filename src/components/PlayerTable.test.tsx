@@ -232,6 +232,24 @@ describe('PlayerTable interactions', () => {
     expect(row?.textContent).toContain('—')
   })
 
+  it('exposes each source line on the projected points hover', () => {
+    renderTable({
+      picks: [],
+      players: [
+        {
+          ...players[1],
+          fullName: 'Split Back',
+          projectedPoints: 353.5,
+          projectionBreakdown: [
+            { id: 'cbs', label: 'CBS', stats: { rush_yd: 1349 }, games: 17, points: 348.2 },
+            { id: 'espn', label: 'ESPN', stats: { rush_yd: 1373 }, games: 17, points: 364.9 },
+          ],
+        },
+      ],
+    })
+    expect(screen.getByLabelText(/Consensus 353\.5.*CBS 348\.2.*ESPN 364\.9/s)).toBeInTheDocument()
+  })
+
   it('shows the live ADP board position and blanks players off the board', () => {
     renderTable({
       picks: [],
@@ -243,6 +261,30 @@ describe('PlayerTable interactions', () => {
     expect(screen.getByText('4.7')).toBeInTheDocument()
     const row = screen.getByText('Off The Board').closest('tr')
     expect(row?.textContent).toContain('—')
+  })
+
+  it('prints live ADP 1-day and 7-day change next to Live ADP', () => {
+    renderTable({
+      picks: [],
+      players: [
+        { ...players[1], fullName: 'Rising Back', liveAdp: 105.6, liveAdpVsLastOne: 9.3, liveAdpVsLastSeven: 4.2 },
+        { ...players[2], fullName: 'Falling End', liveAdp: 40.1, liveAdpVsLastOne: -5.0, liveAdpVsLastSeven: -1.4 },
+        { ...players[3], fullName: 'No Movement' },
+      ],
+    })
+    expect(screen.getByRole('columnheader', { name: /vs 1d/i })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /vs 7d/i })).toBeInTheDocument()
+    const rising = screen.getByText('Rising Back').closest('tr')
+    expect(rising).toHaveTextContent('↑ 9.3')
+    expect(rising).toHaveTextContent('↑ 4.2')
+    expect(rising?.querySelector('.cc-up')).toHaveTextContent('↑ 9.3')
+    const falling = screen.getByText('Falling End').closest('tr')
+    expect(falling).toHaveTextContent('↓ 5.0')
+    expect(falling?.querySelector('.cc-down')).toHaveTextContent('↓ 5.0')
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent ?? '')
+    const emptyCells = screen.getByText('No Movement').closest('tr')?.querySelectorAll('td')
+    expect(emptyCells?.[headers.findIndex((header) => /vs 1d/i.test(header))]?.textContent).toBe('—')
+    expect(emptyCells?.[headers.findIndex((header) => /vs 7d/i.test(header))]?.textContent).toBe('—')
   })
 
   it('marks questionable in amber and IR in red', () => {

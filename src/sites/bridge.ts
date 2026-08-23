@@ -117,6 +117,8 @@ export function requestOpenSite(provider: SiteProviderId, opts?: {
   teamId?: string
   page?: 'home' | 'team'
   url?: string
+  /** Refresh the league tab, then come back so the draft room can ingest it. */
+  returnToApp?: boolean
 }) {
   const season = opts?.season ?? CURRENT_SEASON
   const leagueId = opts?.leagueId?.trim()
@@ -136,7 +138,7 @@ export function requestOpenSite(provider: SiteProviderId, opts?: {
     if (data?.source === SITE_BRIDGE_SOURCE && data.type === 'OPEN_SITE_ACK' && data.provider === provider) acked = true
   }
   window.addEventListener('message', onAck)
-  window.postMessage({ source: SITE_APP_SOURCE, type: 'OPEN_SITE', provider, leagueId, season, teamId, url }, '*')
+  window.postMessage({ source: SITE_APP_SOURCE, type: 'OPEN_SITE', provider, leagueId, season, teamId, url, returnToApp: Boolean(opts?.returnToApp) }, '*')
   window.setTimeout(() => {
     window.removeEventListener('message', onAck)
     if (!acked) window.open(url, `${provider}-draft-assistant`)

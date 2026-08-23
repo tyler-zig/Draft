@@ -487,6 +487,8 @@ var DraftAssistantCore = (() => {
       teams: teamCount,
       rounds: Math.max(rosterPositions.length, 1),
       pickTimer: league.settings?.draftSettings?.pickTimeout ?? null,
+      clockEndsAt: snapshot.clock?.paused ? null : snapshot.clock?.endsAt ?? null,
+      clockPaused: Boolean(snapshot.clock?.paused),
       slots,
       rosterPositions,
       order,

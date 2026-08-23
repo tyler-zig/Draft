@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { getPlayerIntelligence, playerIntelligenceQueryKey } from '../api/playerIntelligence'
 import { playerScheduleFromHistorical, type HistoricalSeason } from '../api/playerHistorical'
-import { getNflProjections, lookupPlayerProjection, projectedPointsFor, projectionSeason, type PlayerProjection } from '../api/playerProjections'
+import { getNflProjections, lookupPlayerProjection, projectedPointsFor, projectionSeason, scoreBreakdown, type PlayerProjection } from '../api/playerProjections'
+import { ProjectionHover } from './ProjectionHover'
 import { byeWeekFromSchedule } from '../intelligence/calculations/matchup'
 import type { Player, PlayoffWeeks, ScoringType } from '../providers/types'
 import { PlayerScheduleGrid } from './PlayerSchedule'
@@ -225,6 +226,9 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
     ? projectedPointsFor(projectionRow, scoringType, currentDraft?.scoringSettings ?? null, currentDraft?.scoringSettings ? null : receptionOverride)
     : null
   const projectedPpg = projectedPoints != null && projectionRow?.games != null && projectionRow.games > 0 ? projectedPoints / projectionRow.games : null
+  const projectionBreakdown = projectionRow
+    ? scoreBreakdown(projectionRow, scoringType, currentDraft?.scoringSettings ?? null, currentDraft?.scoringSettings ? null : receptionOverride)
+    : []
   const chips = context ? verdictChips(player, context) : []
   const status = isKeeper ? 'Kept' : isTaken ? 'Drafted' : null
   const call = draftCall(player, context, status)
@@ -303,11 +307,23 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
                   <tbody>
                     <tr className="pd-proj">
                       <td className="pd-season">{projectionRow?.season ?? seasonYear} <small className="pd-proj-tag">proj</small></td>
-                      {projectionsQuery.isPending ? <td colSpan={columns.length + 3}>Loading RotoWire projection…</td> : <>
-                        {columns.map((column) => <td key={column.key}>{projectionRow ? shownNumber(column.project(projectionRow)) : '—'}</td>)}
+                      {projectionsQuery.isPending ? <td colSpan={columns.length + 3}>Loading season projection…</td> : <>
+                        {columns.map((column) => <td key={column.key}>{projectionRow
+                          ? <ProjectionHover
+                              value={column.project(projectionRow)}
+                              breakdown={projectionBreakdown}
+                              label={column.label}
+                              pick={(line) => column.project({ ...projectionRow, stats: { ...projectionRow.stats, ...line.stats }, games: line.games ?? projectionRow.games })}
+                            />
+                          : '—'}</td>)}
                         <td>—</td>
-                        <td className="pd-strong">{projectedPoints == null ? '—' : projectedPoints.toFixed(1)}</td>
-                        <td className="pd-strong">{projectedPpg == null ? '—' : projectedPpg.toFixed(1)}</td>
+                        <td className="pd-strong"><ProjectionHover value={projectedPoints} breakdown={projectionBreakdown} label={scoringLabel(scoringType)} /></td>
+                        <td className="pd-strong"><ProjectionHover
+                          value={projectedPpg}
+                          breakdown={projectionBreakdown}
+                          label="PPG"
+                          pick={(line) => line.points != null && line.games ? line.points / line.games : null}
+                        /></td>
                       </>}
                     </tr>
                     {seasons.map((season) => {

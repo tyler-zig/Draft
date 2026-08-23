@@ -351,6 +351,7 @@ export interface ProjectedPointsEntry {
   name: string
   position: string
   points: number
+  breakdown?: import('./collectedProjections').ProjectionSourceLine[]
 }
 
 function pointsForScoring(stats: HistoricalSeason['stats'], scoring: ScoringType): number {

@@ -269,7 +269,7 @@ export function RankingsSheet({
                   <div>
                     <div className="cc-eyebrow">Library</div>
                     <h3>Import or collect</h3>
-                    <p>Bring in a list you own, or refresh the public collector. New sets land in the recipe after you load them.</p>
+                    <p>Bring in a list you own, or load the hosted snapshots Supabase Cron publishes. Real-Time ADP is its own 15-minute job.</p>
                   </div>
                 </div>
                 <RankingsPanel draftPlayers={directory} onChange={onChange} />

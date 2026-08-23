@@ -9,12 +9,36 @@ import {
   type DraftPick,
   type DraftProvider,
   type DraftSession,
+  type DraftSlot,
   type Player,
   type ScoringType,
+  type SlotCounts,
 } from './types'
 
 const DEMO_DRAFT_ID = 'local'
 const DEMO_USER_ID = 'you'
+
+/**
+ * A real league's shape, so a mock can be run against your actual room rather
+ * than twelve invented CPUs.
+ *
+ * Carrying `order` verbatim is the point: keeper entries are stored against
+ * provider roster ids, and `keeperPicks` drops any entry whose roster it
+ * cannot place. Regenerating names would silently discard every keeper.
+ */
+export interface MockLeagueTemplate {
+  name: string
+  teams: number
+  rounds: number
+  scoringType: ScoringType
+  slots: SlotCounts
+  rosterPositions: string[]
+  order: DraftSlot[]
+  yourUserId: string
+  yourSlot: number | null
+  keeperCount?: number | null
+  scoringSettings?: Record<string, number> | null
+}
 
 /** Shape a new mock draft is configured from; every field is optional. */
 export interface MockOptions {
@@ -28,6 +52,21 @@ export interface MockOptions {
   autoPickYourPicks?: boolean
   /** Injected randomness so tests can pin the simulation. */
   rng?: () => number
+  /**
+   * Run against a real league's teams instead of generated CPUs. When set,
+   * `teams`, `rounds`, `yourSlot` and `scoringType` come from the template.
+   */
+  template?: MockLeagueTemplate | null
+  /**
+   * Keeper picks, already resolved to the slots they occupy by `keeperPicks`.
+   *
+   * These are seeded into the engine's own board rather than layered on at
+   * render time. The engine numbers picks by walking unoccupied slots, so a
+   * seeded keeper both removes its player from the pool and reserves the pick
+   * its team paid for -- which is what stops the simulation from drafting over
+   * the keeper and dropping it off the board.
+   */
+  keeperPicks?: DraftPick[]
 }
 
 export const DEMO_MOCK_DEFAULTS = {
@@ -52,14 +91,23 @@ function validatedOptions(options: MockOptions): {
   reach: number
   autoPickYourPicks: boolean
 } {
-  const teams = clamp(options.teams, 2, 20, DEMO_MOCK_DEFAULTS.teams)
-  const rounds = clamp(options.rounds, 1, 30, DEMO_MOCK_DEFAULTS.rounds)
-  const yourSlot = clamp(options.yourSlot, 1, teams, Math.min(DEMO_MOCK_DEFAULTS.yourSlot, teams))
+  // A template describes a real room, so its shape wins over the mock sliders.
+  const template = options.template ?? null
+  const teams = template
+    ? clamp(template.teams, 2, 20, DEMO_MOCK_DEFAULTS.teams)
+    : clamp(options.teams, 2, 20, DEMO_MOCK_DEFAULTS.teams)
+  const rounds = template
+    ? clamp(template.rounds, 1, 30, DEMO_MOCK_DEFAULTS.rounds)
+    : clamp(options.rounds, 1, 30, DEMO_MOCK_DEFAULTS.rounds)
+  const yourSlot = template
+    ? clamp(template.yourSlot ?? 1, 1, teams, 1)
+    : clamp(options.yourSlot, 1, teams, Math.min(DEMO_MOCK_DEFAULTS.yourSlot, teams))
   const reach = Number.isFinite(options.reach)
     ? Math.min(1, Math.max(0, options.reach!))
     : DEMO_MOCK_DEFAULTS.reach
-  const scoringType = options.scoringType === 'half_ppr' || options.scoringType === 'std'
-    ? options.scoringType
+  const requestedScoring = template ? template.scoringType : options.scoringType
+  const scoringType = requestedScoring === 'half_ppr' || requestedScoring === 'std'
+    ? requestedScoring
     : 'ppr'
   return {
     teams,
@@ -90,6 +138,7 @@ class DemoDraftEngine {
   session: DraftSession
   initialized = false
   private config: ReturnType<typeof validatedOptions> & { rng: () => number }
+  private template: MockLeagueTemplate | null = null
 
   constructor() {
     this.config = { ...DEMO_MOCK_DEFAULTS, rng: Math.random }
@@ -98,13 +147,51 @@ class DemoDraftEngine {
 
   reset(options: MockOptions = {}) {
     this.config = { ...validatedOptions(options), rng: options.rng ?? Math.random }
-    this.picks = []
+    this.template = options.template ?? null
     this.session = this.buildSession()
+
+    // Keepers are the board's opening state, not an overlay on top of it. Only
+    // entries belonging to a roster in this room are seeded -- a keeper for a
+    // team that is not playing would otherwise reserve a pick nobody owns.
+    const rosters = new Set(this.session.order.map((slot) => slot.rosterId))
+    const total = this.config.teams * this.config.rounds
+    this.picks = (options.keeperPicks ?? [])
+      .filter((pick) => rosters.has(pick.rosterId ?? '') && pick.pickNo <= total)
+      .map((pick) => ({ ...pick, isKeeper: true }))
+    // A keeper parked off the snake (`pickNo <= 0`, the "keepers do not cost a
+    // pick" rule) holds no slot, so the room still drafts every round --
+    // `currentPickNo` only treats positive pick numbers as taken.
     this.initialized = true
+    if (this.isOver()) this.session = { ...this.session, status: 'complete' }
   }
 
   private buildSession(): DraftSession {
     const { teams, rounds, yourSlot, scoringType } = this.config
+    const template = this.template
+    if (template) {
+      return {
+        provider: 'demo',
+        draftId: DEMO_DRAFT_ID,
+        leagueId: 'demo',
+        name: `${template.name} (mock)`,
+        type: 'snake',
+        status: 'drafting',
+        season: CURRENT_SEASON,
+        scoringType,
+        teams,
+        rounds,
+        pickTimer: 90,
+        slots: template.slots,
+        rosterPositions: template.rosterPositions,
+        order: template.order,
+        yourUserId: template.yourUserId,
+        yourSlot: template.yourSlot,
+        startTime: Date.now(),
+        keeperCount: template.keeperCount ?? null,
+        scoringSettings: template.scoringSettings ?? null,
+        playoffWeeks: null,
+      }
+    }
     const order = Array.from({ length: teams }, (_, i) => {
       const slot = i + 1
       const isYou = slot === yourSlot
@@ -158,12 +245,30 @@ class DemoDraftEngine {
     }
   }
 
+  private totalPicks() {
+    return this.config.teams * this.config.rounds
+  }
+
+  /**
+   * The next slot nobody owns yet.
+   *
+   * Counting `picks.length + 1` was fine while every pick was made in order,
+   * but a keeper occupies the slot its team paid for -- which can be pick 7 of
+   * round 1 while rounds 2 and 3 are still empty. Walking to the first
+   * unreserved, undrafted slot is what lets the simulation draft around
+   * keepers instead of over them. Returns one past the end when the board is
+   * full.
+   */
   currentPickNo() {
-    return this.picks.length + 1
+    const total = this.totalPicks()
+    const taken = new Set(this.picks.filter((pick) => pick.pickNo > 0).map((pick) => pick.pickNo))
+    let pickNo = 1
+    while (pickNo <= total && taken.has(pickNo)) pickNo += 1
+    return pickNo
   }
 
   isOver() {
-    return this.picks.length >= this.config.teams * this.config.rounds
+    return this.currentPickNo() > this.totalPicks()
   }
 
   onTheClockSlot() {
@@ -304,7 +409,10 @@ export const demoProvider: DraftProvider = {
   },
 
   async getPicks() {
-    return engine.picks
+    // Seeded keepers can reserve a slot later than the picks made after them,
+    // so the engine's array is not in board order. Everything downstream reads
+    // this as a board.
+    return [...engine.picks].sort((a, b) => a.pickNo - b.pickNo)
   },
 
   getPlayers() {

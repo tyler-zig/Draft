@@ -2,13 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getProvider } from '../providers'
-import { demoPick, demoTick, initDemoDraft } from '../providers/demoProvider'
+import { DEMO_DRAFT_ID, demoPick, demoProvider, demoTick, initDemoDraft } from '../providers/demoProvider'
 import { recommendPicks, suggestionSet } from '../draft/recommend'
 import { fillRoster } from '../draft/rosterNeeds'
 import { byeWeekDistribution, formatByePositions } from '../draft/byeWeeks'
 import { nextOpenPickNumber, nextPickNumberForSlot, ownerSlotForPick, picksUntilSlot } from '../draft/snake'
 import { loadQueue, moveQueueItem, resolveQueuePlayerIds, saveQueue, subscribeQueue } from '../draft/queue'
-import { keeperStorageKey, loadKeepers, loadKeepersCostRoundPicks, mergeKeepers, occupiedPickNumbers, saveKeepers, saveKeepersCostRoundPicks, withKeeperPicks } from '../draft/keepers'
+import { keeperPicks, keeperStorageKey, loadKeepers, loadKeepersCostRoundPicks, mergeKeepers, occupiedPickNumbers, saveKeepers, saveKeepersCostRoundPicks, withKeeperPicks } from '../draft/keepers'
+import { normalizePickSlots } from '../draft/pickSlots'
+import { clearMockLeagueSeed, loadMockLeagueSeed, mockTemplateFrom, saveMockLeagueSeed } from '../draft/mockLeague'
 import { playerDraftContext } from '../draft/playerContext'
 import { clearCurrentDraft, playerIntelligenceHrefForSession, saveCurrentDraft } from '../draft/currentDraft'
 import { PlayerTable, isBoardPositionFilter, type PositionFilter } from '../components/PlayerTable'
@@ -34,10 +36,11 @@ import { applyLiveAdp, liveAdpQuery } from '../rankings/liveAdp'
 import { buildValuations } from '../extension/playerValuations'
 import { loadImportedSets, loadRankSettings } from '../rankings/store'
 import { loadDraftSounds, loadTableColumns, loadTheme, saveDraftSounds, saveTableColumns, saveTheme, type AppTheme, type TableColumnKey } from '../preferences'
+import { formatPickClock, remainingPickSeconds } from '../draft/clock'
 import { useDraftSounds } from '../draft/sounds'
 import { sleeperProvider } from '../providers/sleeperProvider'
 import { DEFAULT_PLAYOFF_WEEKS } from '../providers/types'
-import type { DraftPick, KeeperEntry, Player, ScoringType } from '../providers/types'
+import type { DraftPick, DraftSession, KeeperEntry, Player, ScoringType } from '../providers/types'
 import type { RankSet } from '../rankings/types'
 import { attachPlayoffSos, attachProjectedPoints, applyScheduleByes, enrichPlayersWithDirectory } from '../intelligence/players'
 import { attachProjectedAdp, getNflProjections, projectionPointsPool, projectionSeason } from '../api/playerProjections'
@@ -63,6 +66,16 @@ function scoringLabel(scoring: ScoringType) {
   return 'Scoring n/a'
 }
 const positionClass = (position: string) => `cc-${position.toLowerCase().replace('/', '')}`
+
+function useNow(enabled: boolean, intervalMs = 250) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!enabled) return
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs)
+    return () => window.clearInterval(id)
+  }, [enabled, intervalMs])
+  return now
+}
 
 export function DraftRoom() {
   const navigate = useNavigate()
@@ -155,6 +168,9 @@ export function DraftRoom() {
     draftId === espnDraftId(espnSnapshot.season || '2026', espnSnapshot.leagueId || ''),
   )
   const espnReady = providerId !== 'espn' || espnSnapshotMatchesRoute
+  const liveClock = providerId === 'espn' && espnSnapshotMatchesRoute ? espnSnapshot?.clock : null
+  const clockNow = useNow(Boolean(liveClock && !liveClock.paused && liveClock.endsAt))
+  const clockSeconds = remainingPickSeconds(liveClock, clockNow)
   const siteReady = !siteId || Boolean(
     siteBridge?.snapshot?.league &&
     draftId === siteDraftId(siteBridge.snapshot.season || '2026', siteBridge.snapshot.leagueId || ''),
@@ -170,6 +186,34 @@ export function DraftRoom() {
   useEffect(() => {
     if (session) saveCurrentDraft(session)
   }, [session])
+  const askedLeagueRefresh = useRef<string | null>(null)
+  useEffect(() => {
+    if (!draftId) return
+    const refreshKey = `${providerId}:${draftId}`
+    if (askedLeagueRefresh.current === refreshKey) return
+    if (providerId === 'espn') {
+      if (!espnHydrated || espnReady) return
+      askedLeagueRefresh.current = refreshKey
+      const ref = parseEspnDraftId(draftId)
+      requestOpenEspn({
+        leagueId: ref.leagueId,
+        season: ref.season,
+        teamId: userId,
+        page: 'team',
+        returnToApp: true,
+      })
+      return
+    }
+    if (!siteId || !siteBridge?.hydrated || siteReady) return
+    askedLeagueRefresh.current = refreshKey
+    const ref = parseSiteDraftId(draftId)
+    requestOpenSite(siteId, {
+      leagueId: ref.leagueId,
+      season: ref.season,
+      teamId: userId,
+      returnToApp: true,
+    })
+  }, [draftId, espnHydrated, espnReady, providerId, siteBridge?.hydrated, siteId, siteReady, userId])
   const refetchPicks = picksQuery.refetch
   const players = playersQuery.data ?? EMPTY_PLAYERS
   const madePicks = picksQuery.data ?? EMPTY_PICKS
@@ -224,7 +268,10 @@ export function DraftRoom() {
   // Keepers ride the board as picks, so availability, roster, recs and the
   // board all account for them without knowing keepers exist. When the
   // league does not charge a round, those picks stay off the snake.
-  const picks = useMemo(() => withKeeperPicks(madePicks, merged.keepers, session, playersById, { costRoundPicks: keepersCostRoundPicks }), [madePicks, merged.keepers, session, playersById, keepersCostRoundPicks])
+  // Normalised so every consumer -- roster, recommendations, grades, overlay --
+  // reads the same team for a pick. Providers do not always report `draftSlot`
+  // as the owning team's slot.
+  const picks = useMemo(() => normalizePickSlots(withKeeperPicks(madePicks, merged.keepers, session, playersById, { costRoundPicks: keepersCostRoundPicks }), session), [madePicks, merged.keepers, session, playersById, keepersCostRoundPicks])
   const takenPickNos = useMemo(() => occupiedPickNumbers(picks), [picks])
   // Not picks.length + 1: keeper picks sit in later rounds, so the made picks
   // are not a contiguous run from pick 1.
@@ -239,6 +286,43 @@ export function DraftRoom() {
     const id = window.setInterval(() => { demoTick(players, keptIds); void refetchPicks() }, speed)
     return () => window.clearInterval(id)
   }, [providerId, players, refetchPicks, mockSpeed, keptIds])
+
+  /**
+   * A reload drops the mock engine's in-memory board, and `getDraft` restarts
+   * it with no knowledge of keepers -- so the simulation would draft straight
+   * over the picks keepers own, which is exactly the bug seeding fixes. Re-seed
+   * a fresh engine from what is stored.
+   *
+   * Guarded on an empty board so this can only ever run against a mock that has
+   * not started; a draft in progress is never rebuilt underneath itself.
+   */
+  const demoSeeded = useRef(false)
+  useEffect(() => {
+    if (providerId !== 'demo' || demoSeeded.current) return
+    if (!session || madePicks.length > 0) return
+    if (!storedKeepers.length) return
+    demoSeeded.current = true
+    void (async () => {
+      const seed = loadMockLeagueSeed()
+      const common = { reach: mockReach / 100, autoPickYourPicks: mockAutoPick }
+      const shape = seed
+        ? { template: seed.template, ...common }
+        : { teams: mockTeams, rounds: mockRounds, yourSlot: mockYourSlot, scoringType: mockScoring, ...common }
+      const entries = seed ? seed.keepers : storedKeepers
+      const cost = seed ? seed.costRoundPicks : keepersCostRoundPicks
+      // Build the room first so keeper entries resolve against its own order,
+      // then reseed that same room with the picks they occupy.
+      initDemoDraft(shape)
+      const room = await demoProvider.getDraft(DEMO_DRAFT_ID, session.yourUserId)
+      // Deliberately not cancelled on unmount. Seeding is idempotent and the
+      // ref guard already prevents repeats; aborting it under StrictMode's
+      // double-invoke would leave the engine unseeded and silently restore the
+      // draft-over-keepers bug.
+      initDemoDraft({ ...shape, keeperPicks: keeperPicks(entries, room, [], playersById, { costRoundPicks: cost }) })
+      void queryClient.invalidateQueries({ queryKey: ['draft', 'demo'] })
+      void queryClient.invalidateQueries({ queryKey: ['picks', 'demo'] })
+    })()
+  }, [providerId, session, madePicks.length, storedKeepers, keepersCostRoundPicks, playersById, queryClient, mockReach, mockAutoPick, mockTeams, mockRounds, mockYourSlot, mockScoring])
 
   // The end-of-mock report: when a demo draft completes, the grades sheet
   // opens itself so the payoff -- how every team graded out -- is the first
@@ -335,26 +419,23 @@ export function DraftRoom() {
     const otherId = espnSnapshot?.leagueId
     return <AppScreen
       busy={!espnHydrated}
-      title={espnHydrated ? 'ESPN sync is unavailable' : 'Restoring ESPN sync'}
+      title={espnHydrated ? 'Refreshing ESPN league' : 'Restoring ESPN sync'}
       body={espnHydrated
         ? otherId && otherId !== ref.leagueId
-          ? `The extension is syncing ESPN league ${otherId}. Open that draft room from Leagues, or switch the ESPN tab back to this league.`
-          : 'The extension has no saved snapshot yet. Retry the saved sync, or open ESPN only if Chrome cleared it.'
-        : 'Asking the extension for your last saved league. You do not need to revisit the ESPN tab.'}
+          ? `The extension is syncing ESPN league ${otherId}. Opening this league's tab so it can switch.`
+          : 'Opening your ESPN league tab so the extension can pull a fresh snapshot.'
+        : 'Asking the extension for your last saved league. If it is missing, the ESPN tab will refresh next.'}
       action={<div className="flex flex-wrap justify-center gap-2">
         <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" onClick={refreshEspn}>Retry saved sync</button>
         {espnHydrated ? <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" onClick={() => {
-          // This recovery screen belongs to the draft in the route. A stale
-          // extension snapshot may point at a different league, so using it
-          // here sends the user to exactly the wrong clubhouse when they try
-          // to resync. The route is the stable source of truth for recovery.
           requestOpenEspn({
             leagueId: ref.leagueId,
             season: ref.season,
             teamId: userId,
             page: 'team',
+            returnToApp: true,
           })
-        }}>Open this ESPN league</button> : null}
+        }}>Refresh ESPN tab</button> : null}
         <Link className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" to="/">Back to leagues</Link>
       </div>}
     />
@@ -364,13 +445,13 @@ export function DraftRoom() {
     const label = siteId === 'yahoo' ? 'Yahoo' : 'NFL.com'
     return <AppScreen
       busy={!siteBridge?.hydrated}
-      title={siteBridge?.hydrated ? `${label} sync is unavailable` : `Restoring ${label} sync`}
+      title={siteBridge?.hydrated ? `Refreshing ${label} league` : `Restoring ${label} sync`}
       body={siteBridge?.hydrated
-        ? `The extension has no saved ${label} snapshot yet. Open your league tab, then retry.`
-        : `Asking the extension for your last saved ${label} league.`}
+        ? `Opening your ${label} league tab so the extension can pull a fresh snapshot.`
+        : `Asking the extension for your last saved ${label} league. If it is missing, that tab will refresh next.`}
       action={<div className="flex flex-wrap justify-center gap-2">
         <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" onClick={() => siteBridge?.refresh()}>Retry saved sync</button>
-        {siteBridge?.hydrated ? <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" onClick={() => requestOpenSite(siteId as SiteProviderId, { leagueId: ref.leagueId, season: ref.season, teamId: userId })}>Open {label}</button> : null}
+        {siteBridge?.hydrated ? <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" onClick={() => requestOpenSite(siteId as SiteProviderId, { leagueId: ref.leagueId, season: ref.season, teamId: userId, returnToApp: true })}>Refresh {label} tab</button> : null}
         <Link className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent" to="/">Back to leagues</Link>
       </div>}
     />
@@ -400,6 +481,8 @@ export function DraftRoom() {
   const updateTheme = (next: AppTheme) => { setTheme(next); saveTheme(next) }
   const updateDraftSounds = (next: boolean) => { setDraftSounds(next); saveDraftSounds(next) }
   const updateColumns = (next: TableColumnKey[]) => { setVisibleColumns(next); saveTableColumns(next) }
+  // Only a mock room stands in for another league, so the seed is only read there.
+  const mockLeagueSeed = providerId === 'demo' ? loadMockLeagueSeed() : null
   const mockDraft: MockDraftSettings | null = providerId === 'demo' ? { teams: mockTeams, rounds: mockRounds, yourSlot: mockYourSlot, scoring: mockScoring, reach: mockReach, speed: mockSpeed, autoPick: mockAutoPick } : null
   const updateMockDraft = (next: MockDraftSettings) => {
     setMockTeams(next.teams)
@@ -415,7 +498,75 @@ export function DraftRoom() {
     requestExitEspnPractice()
     navigate('/', { replace: true })
   }
+  /**
+   * Keepers as the mock engine needs them: resolved to the pick each one
+   * occupies, so the simulation reserves those slots instead of drafting over
+   * them. `keeperPicks` is the same resolver the live board uses, so a mock
+   * and the room it came from agree on what a keeper costs.
+   */
+  const mockKeeperPicksFor = (
+    forSession: DraftSession,
+    entries: KeeperEntry[],
+    costRoundPicks: boolean,
+  ) => keeperPicks(entries, forSession, [], playersById, { costRoundPicks })
+
   const startMockDraft = () => {
+    const seed = loadMockLeagueSeed()
+    if (seed) {
+      // Re-running a mock of a real league: rebuild from the seed rather than
+      // the sliders, which describe a generated room.
+      const seeded = { ...session, ...seed.template, order: seed.template.order } as DraftSession
+      initDemoDraft({
+        template: seed.template,
+        reach: mockReach / 100,
+        autoPickYourPicks: mockAutoPick,
+        keeperPicks: mockKeeperPicksFor(seeded, seed.keepers, seed.costRoundPicks),
+      })
+      setViewedSlot(seed.template.yourSlot ?? 1)
+    } else {
+      initDemoDraft({
+        teams: mockTeams,
+        rounds: mockRounds,
+        yourSlot: mockYourSlot,
+        scoringType: mockScoring,
+        reach: mockReach / 100,
+        autoPickYourPicks: mockAutoPick,
+        // Keepers entered against the mock room itself still count.
+        keeperPicks: mockKeeperPicksFor(session, merged.keepers, keepersCostRoundPicks),
+      })
+      setViewedSlot(mockYourSlot)
+    }
+    setBoardRound(null)
+    setGradesOpen(false)
+    void queryClient.invalidateQueries({ queryKey: ['draft', 'demo'] })
+    void queryClient.invalidateQueries({ queryKey: ['picks', 'demo'] })
+  }
+
+  /**
+   * Run a mock of the league currently open: same teams, same roster ids, same
+   * keepers. The keeper entries are copied onto the mock's own storage key so
+   * the mock room's keeper panel edits the mock, never the real league.
+   */
+  const startLeagueMock = () => {
+    const template = mockTemplateFrom(session)
+    const entries = merged.keepers.map((entry) => ({ ...entry, source: 'manual' as const }))
+    saveMockLeagueSeed({ template, keepers: entries, costRoundPicks: keepersCostRoundPicks, sourceKey: keeperKey })
+    const mockKey = keeperStorageKey('demo', DEMO_DRAFT_ID)
+    saveKeepers(mockKey, entries)
+    saveKeepersCostRoundPicks(mockKey, keepersCostRoundPicks)
+    initDemoDraft({
+      template,
+      reach: mockReach / 100,
+      autoPickYourPicks: mockAutoPick,
+      keeperPicks: mockKeeperPicksFor(session, merged.keepers, keepersCostRoundPicks),
+    })
+    setSettingsOpen(false)
+    navigate(`/draft/demo/${DEMO_DRAFT_ID}?userId=${encodeURIComponent(template.yourUserId)}`)
+  }
+
+  /** Drop the seed so the next mock is a plain generated room again. */
+  const clearLeagueMock = () => {
+    clearMockLeagueSeed()
     initDemoDraft({ teams: mockTeams, rounds: mockRounds, yourSlot: mockYourSlot, scoringType: mockScoring, reach: mockReach / 100, autoPickYourPicks: mockAutoPick })
     setViewedSlot(mockYourSlot)
     setBoardRound(null)
@@ -448,7 +599,7 @@ export function DraftRoom() {
     <header className="cc-topbar">
       <div className="cc-topbar-left"><div className="cc-menu-wrap"><button type="button" className="cc-icon" aria-label="Menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>☰</button>{menuOpen ? <nav className="cc-nav-menu" aria-label="Draft Room navigation"><Link to="/" onClick={() => setMenuOpen(false)}>Leagues</Link><Link to={playerIntelligenceHrefForSession(session)} onClick={() => setMenuOpen(false)}>Players</Link><button type="button" onClick={() => { setRankingsOpen(true); setMenuOpen(false) }}>Rankings</button>{providerId === 'espn' ? <button type="button" onClick={exitPracticeDraft}>{isPracticeRoom ? 'Exit practice draft' : 'Exit ESPN draft'}</button> : null}{isPracticeRoom ? null : <button type="button" onClick={() => { setKeepersOpen(true); setMenuOpen(false) }}>Keepers</button>}</nav> : null}</div><Link to="/" className="cc-brand">Draft Assistant</Link><div className="cc-team-switch"><label className="cc-picker cc-team-picker"><TeamLogo src={viewedTeam?.avatar} label={viewedTeam?.teamName || viewedTeam?.displayName || 'Team'} /><Select aria-label="View team roster" value={rosterSlot} onChange={(event) => setViewedSlot(Number(event.target.value))}>{session.order.map((slot) => <option key={slot.slot} value={slot.slot}>{slot.teamName || slot.displayName}{slot.isYou ? ' (you)' : ''}</option>)}</Select></label><button type="button" className="cc-team-you" disabled={session.yourSlot == null || rosterSlot === session.yourSlot} onClick={() => setViewedSlot(session.yourSlot)} aria-label="View your team" title="View your team">You</button></div></div>
       <div className="cc-league">{session.name} <span>·</span> Round {currentLocation.round}, Pick {currentPickNo}<small className={`cc-provider-badge ${canMutateDraft ? 'cc-provider-demo' : ''}`}>{provider.label} · {isPracticeRoom ? 'Practice' : canMutateDraft ? 'Demo controls' : 'Read-only'} · <span className={session.scoringType === 'unknown' ? 'cc-scoring-unknown' : undefined} title={session.scoringType === 'unknown' ? 'The league payload carried no scoring settings, so ADP and projections fall back to a cross-market blend.' : 'Detected from the league scoring settings'}>{scoringLabel(session.scoringType)}</span></small>{isPracticeRoom ? <button type="button" className="cc-rankings-button" onClick={exitPracticeDraft}>Exit practice</button> : null}</div>
-      <div className="cc-topbar-right"><AccountButton compact /><Link className="cc-rankings-button" to={playerIntelligenceHrefForSession(session)}>Players</Link><button type="button" className="cc-rankings-button" onClick={() => setRankingsOpen(true)}>Rankings</button><button type="button" className="cc-rankings-button" onClick={() => setGradesOpen(true)}>Grades</button><div className="cc-clock">{youAreOnClock ? 'ON THE CLOCK' : 'YOUR PICK IN'} <b>{youAreOnClock ? Math.max(0, session.pickTimer ?? 0) : until ?? '—'}</b></div><button type="button" className="cc-icon" aria-label={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} title={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} onClick={() => updateDraftSounds(!draftSounds)}>{draftSounds ? '🔊' : '🔇'}</button><button type="button" className="cc-icon" aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => updateTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☼' : '☾'}</button><button type="button" className="cc-icon" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
+      <div className="cc-topbar-right"><AccountButton compact /><Link className="cc-rankings-button" to={playerIntelligenceHrefForSession(session)}>Players</Link><button type="button" className="cc-rankings-button" onClick={() => setRankingsOpen(true)}>Rankings</button><button type="button" className="cc-rankings-button" onClick={() => setGradesOpen(true)}>Grades</button><div className={`cc-clock${youAreOnClock && clockSeconds != null && clockSeconds <= 10 ? ' cc-clock-low' : ''}`}>{youAreOnClock ? 'ON THE CLOCK' : 'YOUR PICK IN'} <b>{youAreOnClock ? (clockSeconds != null ? formatPickClock(clockSeconds) : session.pickTimer != null ? formatPickClock(session.pickTimer) : '—') : until ?? '—'}</b></div><button type="button" className="cc-icon" aria-label={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} title={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} onClick={() => updateDraftSounds(!draftSounds)}>{draftSounds ? '🔊' : '🔇'}</button><button type="button" className="cc-icon" aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => updateTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☼' : '☾'}</button><button type="button" className="cc-icon" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
     </header>
 
     <div className="cc-workspace">
@@ -469,15 +620,23 @@ export function DraftRoom() {
       </aside>
     </div>
 
-    <footer className="cc-footer"><div className="cc-footer-head"><div className="cc-eyebrow">Draft board</div><div className="cc-round-tabs" role="tablist" aria-label="Draft round">{Array.from({ length: session.rounds }, (_, index) => index + 1).map((round) => <button type="button" role="tab" key={round} className={`${viewedRound === round ? 'on' : ''} ${round === currentLocation.round ? 'live' : ''}`} aria-selected={viewedRound === round} aria-label={round === currentLocation.round ? `Round ${round}, current` : `Round ${round}`} onClick={() => setBoardRound(round === currentLocation.round ? null : round)}>{round}</button>)}</div><button type="button" className="cc-board-all" onClick={() => setFullBoardOpen(true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>View full board</button></div><div className="cc-picks" style={{ gridTemplateColumns: `repeat(${session.teams}, minmax(0, 1fr))` }}>{boardPicks.map((pickNo) => { const made = picks.find((pick) => pick.pickNo === pickNo); const loc = ownerSlotForPick(pickNo, session.teams, session.type, session.pickOwners); const owner = session.order.find((slot) => slot.slot === loc.slot); const player = made ? valuedPlayers.find((item) => item.id === made.playerId) : undefined; const isCurrent = pickNo === currentPickNo; return <div key={pickNo} className={`cc-pick ${isCurrent ? 'cc-you' : ''} ${made?.isKeeper ? 'cc-keeper-pick' : ''} ${!made && !isCurrent ? 'cc-future' : ''}`}><span className="cc-no">{pickNo}{made?.isKeeper ? <i className="cc-keeper-tag">K</i> : null}</span>{player ? <PlayerPhoto player={player} className="cc-avatar-xl" /> : <TeamLogo className="cc-team-logo-xl" src={owner?.avatar} label={owner?.teamName || owner?.displayName || `Slot ${loc.slot}`} />}<span className="cc-tm">{owner?.teamName || owner?.displayName || `Slot ${loc.slot}`}</span>{isCurrent ? <span className="cc-mine">{owner?.isYou ? 'YOUR PICK' : 'ON THE CLOCK'}</span> : null}</div> })}</div><div className="cc-next">Viewing round {viewedRound} · {until === 0 ? 'You are on the clock' : `${until ?? '—'} picks until your next pick`}</div></footer>
+    <footer className="cc-footer"><div className="cc-footer-head"><div className="cc-eyebrow">Draft board</div><div className="cc-round-tabs" role="tablist" aria-label="Draft round">{Array.from({ length: session.rounds }, (_, index) => index + 1).map((round) => <button type="button" role="tab" key={round} className={`${viewedRound === round ? 'on' : ''} ${round === currentLocation.round ? 'live' : ''}`} aria-selected={viewedRound === round} aria-label={round === currentLocation.round ? `Round ${round}, current` : `Round ${round}`} onClick={() => setBoardRound(round === currentLocation.round ? null : round)}>{round}</button>)}</div><button type="button" className="cc-board-all" onClick={() => setFullBoardOpen(true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>View full board</button></div><div className="cc-picks" style={{ gridTemplateColumns: `repeat(${session.teams}, minmax(0, 1fr))` }}>{boardPicks.map((pickNo) => { const made = picks.find((pick) => pick.pickNo === pickNo); const loc = ownerSlotForPick(pickNo, session.teams, session.type, session.pickOwners); const owner = session.order.find((slot) => slot.slot === loc.slot); const player = made ? valuedPlayers.find((item) => item.id === made.playerId) : undefined; const isCurrent = pickNo === currentPickNo; const ownerName = owner?.teamName || owner?.displayName || `Slot ${loc.slot}`; const playerName = boardPlayerName(player, made); const position = player?.position || made?.meta?.position || ''; const nflTeam = player?.team ?? made?.meta?.team ?? null; return <div key={pickNo} className={`cc-pick ${isCurrent ? 'cc-you' : ''} ${made?.isKeeper ? 'cc-keeper-pick' : ''} ${!made && !isCurrent ? 'cc-future' : ''}`} title={playerName ? `${player?.fullName || playerName} · ${ownerName}` : ownerName}><span className="cc-no">{pickNo}{made?.isKeeper ? <i className="cc-keeper-tag">K</i> : null}</span>{player ? <PlayerPhoto player={player} className="cc-avatar-xl" /> : <TeamLogo className="cc-team-logo-xl" src={owner?.avatar} label={ownerName} />}{playerName ? <span className="cc-pn">{playerName}</span> : null}<span className="cc-tm">{playerName ? [position, nflTeam].filter(Boolean).join(' · ') || ownerName : ownerName}</span>{isCurrent ? <span className="cc-mine">{owner?.isYou ? 'YOUR PICK' : 'ON THE CLOCK'}</span> : null}</div> })}</div><div className="cc-next">Viewing round {viewedRound} · {until === 0 ? 'You are on the clock' : `${until ?? '—'} picks until your next pick`}</div></footer>
 
     {queueOpen ? <Modal title="Manage draft queue" onClose={() => setQueueOpen(false)}><p className="cc-modal-note">Your order is saved for this draft. Queue actions do not submit picks to {provider.label}.</p>{activeQueue.length ? <ol className="cc-manage-queue">{activeQueue.map((id, index) => { const player = valuedPlayers.find((item) => item.id === id); if (!player) return null; return <li key={id}><span className="cc-n">{index + 1}</span><PlayerPhoto player={player} /><button type="button" className="cc-queue-select" onClick={() => { setSelectedPlayerId(id); setQueueOpen(false) }}>{player.fullName}<small>{player.position} · {player.team ?? 'FA'}</small></button><button type="button" disabled={index === 0} onClick={() => moveQueue(id, -1)} aria-label={`Move ${player.fullName} up`}>↑</button><button type="button" disabled={index === activeQueue.length - 1} onClick={() => moveQueue(id, 1)} aria-label={`Move ${player.fullName} down`}>↓</button><button type="button" className="cc-remove" onClick={() => toggleQueue(id)} aria-label={`Remove ${player.fullName}`}>×</button></li> })}</ol> : <div className="cc-empty-card">Your queue is empty.</div>}</Modal> : null}
     {fullBoardOpen ? <Modal title="Full draft board" wide onClose={() => setFullBoardOpen(false)}><DraftBoard session={session} picks={picks} players={valuedPlayers} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} /></Modal> : null}
     {rankingsOpen ? <RankingsSheet leagueName={session.name} leagueScoring={session.scoringType} receptionPremium={session.receptionPremium} directory={players} builtinSets={builtinSets} importedSets={importedSets} rankSettings={rankSettings} onClose={() => setRankingsOpen(false)} onChange={() => { setRankSettings(loadRankSettings()); setRankTick((tick) => tick + 1) }} /> : null}
     {keepersOpen ? <Modal title="Keepers" onClose={() => setKeepersOpen(false)}><KeeperPanel session={session} players={valuedPlayers} keepers={merged.keepers} manualKeepers={manualKeepers} conflicts={merged.conflicts} candidates={keeperCandidates} providerLabel={provider.label} syncing={keepersQuery.isFetching} costRoundPicks={keepersCostRoundPicks} onChange={setStoredKeepers} /></Modal> : null}
     {gradesOpen ? <Modal title="Draft grades" wide onClose={() => setGradesOpen(false)}><DraftGrades session={session} picks={picks} players={valuedPlayers} highlightedSlot={session.yourSlot} note={providerId === 'demo' && session.status === 'complete' ? 'Mock draft complete — here is how the room graded out.' : undefined} /></Modal> : null}
-    {settingsOpen ? <SettingsSheet leagueName={session.name} providerLabel={provider.label} scoringType={session.scoringType} theme={theme} draftSounds={draftSounds} visibleColumns={visibleColumns} rankSettings={rankSettings} builtinSets={builtinSets} importedSets={importedSets} keeperCount={merged.keepers.length} teamCount={session.teams} allowedKeepers={session.keeperCount} keepersCostRoundPicks={keepersCostRoundPicks} mock={mockDraft} onClose={() => setSettingsOpen(false)} onThemeChange={updateTheme} onDraftSoundsChange={updateDraftSounds} onColumnsChange={updateColumns} onKeepersCostChange={setKeepersCostRoundPicks} onOpenRankings={() => { setSettingsOpen(false); setRankingsOpen(true) }} onOpenKeepers={() => { setSettingsOpen(false); setKeepersOpen(true) }} onMockChange={updateMockDraft} onStartMock={startMockDraft} /> : null}
+    {settingsOpen ? <SettingsSheet leagueName={session.name} providerLabel={provider.label} scoringType={session.scoringType} theme={theme} draftSounds={draftSounds} visibleColumns={visibleColumns} rankSettings={rankSettings} builtinSets={builtinSets} importedSets={importedSets} keeperCount={merged.keepers.length} teamCount={session.teams} allowedKeepers={session.keeperCount} keepersCostRoundPicks={keepersCostRoundPicks} mock={mockDraft} onClose={() => setSettingsOpen(false)} onThemeChange={updateTheme} onDraftSoundsChange={updateDraftSounds} onColumnsChange={updateColumns} onKeepersCostChange={setKeepersCostRoundPicks} onOpenRankings={() => { setSettingsOpen(false); setRankingsOpen(true) }} onOpenKeepers={() => { setSettingsOpen(false); setKeepersOpen(true) }} onMockChange={updateMockDraft} onStartMock={startMockDraft} onMockLeague={providerId === 'demo' ? undefined : startLeagueMock} onClearMockLeague={mockLeagueSeed ? clearLeagueMock : undefined} mockLeagueName={mockLeagueSeed?.template.name ?? null} /> : null}
   </div>
+}
+
+function boardPlayerName(player?: Player, pick?: DraftPick) {
+  const last = player?.lastName || pick?.meta?.lastName || ''
+  if (last) return last
+  if (player?.fullName) return player.fullName
+  const first = player?.firstName || pick?.meta?.firstName || ''
+  return `${first} ${last}`.trim()
 }
 
 function Modal({ title, wide = false, onClose, children }: { title: string; wide?: boolean; onClose: () => void; children: React.ReactNode }) {

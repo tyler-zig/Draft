@@ -12,6 +12,17 @@
   let cachedLeagueKey = ''
   let draftObserver = null
   const liveSelections = []
+  /**
+   * Live pick clock. ESPN's league API only publishes the configured timeout
+   * (`pickTimeout`); remaining seconds live on the draft-room page and socket.
+   * `endsAt` lets the app tick locally so a one-second DOM change does not
+   * force another snapshot across the bridge.
+   */
+  const CLOCK_MAX_SECONDS = 30 * 60
+  let liveClock = null
+  let lastDomRemaining = null
+  let lastDomAt = 0
+  let clockTicker = null
 
   /**
    * ESPN's placeholder id for an unmade pick. Not a sign test: team defenses
@@ -131,12 +142,213 @@
     if (schedule) scheduleLivePulls()
   }
 
+  function applyClockSeconds(seconds, paused = false) {
+    const value = Number(seconds)
+    if (!Number.isFinite(value) || value < 0 || value > CLOCK_MAX_SECONDS) return false
+    const remaining = Math.round(value)
+    const now = Date.now()
+    liveClock = {
+      remaining,
+      endsAt: paused ? null : now + remaining * 1000,
+      paused: Boolean(paused),
+      at: now,
+    }
+    return true
+  }
+
+  function parseClockText(text) {
+    const trimmed = String(text || '').trim()
+    const mmss = trimmed.match(/^(\d{1,2}):([0-5]\d)$/)
+    if (mmss) {
+      const seconds = Number(mmss[1]) * 60 + Number(mmss[2])
+      return seconds <= CLOCK_MAX_SECONDS ? seconds : null
+    }
+    return null
+  }
+
+  function clockSecondsFromValue(value) {
+    if (!value || typeof value !== 'object') return null
+    const keys = [
+      'timeRemaining',
+      'secondsRemaining',
+      'secondsLeft',
+      'remainingTime',
+      'pickTimeRemaining',
+      'clockSeconds',
+      'timerSeconds',
+    ]
+    for (const key of keys) {
+      const raw = Number(value[key])
+      if (!Number.isFinite(raw) || raw < 0) continue
+      const seconds = raw > CLOCK_MAX_SECONDS && raw <= CLOCK_MAX_SECONDS * 1000
+        ? Math.round(raw / 1000)
+        : Math.round(raw)
+      if (seconds <= CLOCK_MAX_SECONDS) return seconds
+    }
+    return null
+  }
+
+  function readClockFromReact(root) {
+    if (!root || typeof root !== 'object') return null
+    const fiberKey = Object.keys(root).find((key) => (
+      key.startsWith('__reactFiber') || key.startsWith('__reactInternalInstance')
+    ))
+    if (!fiberKey) return null
+    const seen = new Set()
+    const queue = [root[fiberKey]]
+    let steps = 0
+    while (queue.length && steps < 400) {
+      const node = queue.shift()
+      steps += 1
+      if (!node || seen.has(node)) continue
+      seen.add(node)
+      const props = node.memoizedProps || node.pendingProps
+      const seconds = clockSecondsFromValue(props) ?? clockSecondsFromValue(node.memoizedState)
+      if (seconds != null) {
+        return {
+          remaining: seconds,
+          paused: Boolean(props?.paused || props?.isPaused || props?.isDraftPaused),
+        }
+      }
+      if (node.child) queue.push(node.child)
+      if (node.sibling) queue.push(node.sibling)
+      if (node.return) queue.push(node.return)
+    }
+    return null
+  }
+
+  function readClockFromDom() {
+    const root = document.querySelector?.('.draftContainer')
+      || document.querySelector?.('main')
+      || document.body
+    if (!root?.querySelectorAll) return null
+    const blob = String(root.textContent || '')
+    const paused = /\bpaused\b|draft is paused/i.test(blob)
+    const labeled = root.querySelectorAll([
+      '[class*="clock" i]',
+      '[class*="timer" i]',
+      '[class*="countdown" i]',
+      '[aria-label*="clock" i]',
+      '[aria-label*="time remaining" i]',
+      '[data-testid*="clock" i]',
+    ].join(','))
+    for (const node of labeled) {
+      const seconds = parseClockText(node.textContent)
+      if (seconds != null) return { remaining: seconds, paused }
+    }
+    const header = root.querySelector?.(
+      '[class*="on-the-clock" i], [class*="ontheclock" i], [class*="draft-header" i], [class*="draftHeader" i]',
+    )
+    const headerMatch = String(header?.textContent || '').match(/\b(\d{1,2}:[0-5]\d)\b/)
+    if (headerMatch) {
+      const seconds = parseClockText(headerMatch[1])
+      if (seconds != null) return { remaining: seconds, paused }
+    }
+    return readClockFromReact(root)
+  }
+
+  function ingestDomClock(fromDom) {
+    if (!fromDom) return
+    const now = Date.now()
+    let paused = fromDom.paused
+    if (lastDomRemaining === fromDom.remaining && now - lastDomAt > 2500) paused = true
+    if (lastDomRemaining !== fromDom.remaining) lastDomAt = now
+    lastDomRemaining = fromDom.remaining
+    applyClockSeconds(fromDom.remaining, paused)
+  }
+
+  function currentClock() {
+    const fromDom = readClockFromDom()
+    const socketAge = liveClock ? Date.now() - liveClock.at : Infinity
+    if (fromDom && (!liveClock || socketAge > 2000)) ingestDomClock(fromDom)
+    if (!liveClock) return undefined
+    if (liveClock.paused) {
+      return { remaining: liveClock.remaining, endsAt: null, paused: true }
+    }
+    const remaining = Math.max(0, Math.ceil((liveClock.endsAt - Date.now()) / 1000))
+    return { remaining, endsAt: liveClock.endsAt, paused: false }
+  }
+
+  function clockStamp(clock) {
+    if (!clock) return ''
+    if (clock.paused) return `p${Math.round(clock.remaining)}`
+    if (clock.endsAt) return `e${Math.round(clock.endsAt / 2000)}`
+    return `r${Math.round(clock.remaining)}`
+  }
+
+  function scheduleClockPost() {
+    window.setTimeout(() => {
+      if (!cachedLeague) return
+      const { leagueId, season, teamId, memberId } = pageIds()
+      if (!leagueId) return
+      const clock = currentClock()
+      const stamp = fingerprint(leagueId, season, teamId, cachedLeague, clock)
+      if (stamp === lastPosted) return
+      lastPosted = stamp
+      const practice = isPracticeLeague(cachedLeague) || practicePageHint || isPracticePath(location.pathname)
+      post({
+        leagueId: String(leagueId),
+        season: String(season),
+        teamId: teamId ? String(teamId) : undefined,
+        pageUrl: location.href,
+        swid: readCookie('SWID') || memberId || undefined,
+        fetchedAt: Date.now(),
+        isPractice: practice,
+        clock,
+        league: trimRosters(cachedLeague),
+      })
+    }, 0)
+  }
+
+  function resetClockFromSettings() {
+    const timeout = Number(cachedLeague?.settings?.draftSettings?.pickTimeout)
+    if (timeout > 0 && timeout <= CLOCK_MAX_SECONDS) applyClockSeconds(timeout, false)
+  }
+
   function inspectDraftSocketFrame(data) {
     if (typeof data !== 'string') return
     for (const line of data.split(/[\r\n]+/)) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
       // The player id may be negative -- ESPN numbers team defenses that way.
-      const match = line.trim().match(/^SELECTED\s+(\d+)\s+(-?\d+)\s+(\d+)(?:\s+.*)?$/i)
-      if (match) rememberLiveSelection(match[1], match[2], match[3])
+      const selected = trimmed.match(/^SELECTED\s+(\d+)\s+(-?\d+)\s+(\d+)(?:\s+.*)?$/i)
+      if (selected) {
+        rememberLiveSelection(selected[1], selected[2], selected[3])
+        resetClockFromSettings()
+        continue
+      }
+      const clock = trimmed.match(/^(?:CLOCK|TIMER|TIME|TIMELEFT|TIME_REMAINING)\s+(\d+(?:\.\d+)?)(?:\s+(\w+))?$/i)
+      if (clock) {
+        applyClockSeconds(Number(clock[1]), /pause/i.test(clock[2] || ''))
+        scheduleClockPost()
+        continue
+      }
+      if (/^PAUSED$/i.test(trimmed)) {
+        if (liveClock) {
+          liveClock = { ...liveClock, paused: true, endsAt: null, at: Date.now() }
+          scheduleClockPost()
+        }
+        continue
+      }
+      if (/^RESUM(?:E|ED)$/i.test(trimmed)) {
+        if (liveClock && liveClock.remaining != null) {
+          applyClockSeconds(liveClock.remaining, false)
+          scheduleClockPost()
+        }
+        continue
+      }
+      if (trimmed.startsWith('{')) {
+        try {
+          const json = JSON.parse(trimmed)
+          const seconds = clockSecondsFromValue(json)
+          if (seconds != null) {
+            applyClockSeconds(seconds, Boolean(json.paused || json.isPaused))
+            scheduleClockPost()
+          }
+        } catch {
+          /* a draft socket line that just happened to start with a brace */
+        }
+      }
     }
   }
 
@@ -185,6 +397,88 @@
       return normalizedName(player?.fullName || `${player?.firstName || ''} ${player?.lastName || ''}`) === wanted
     })
     return match?.player?.id ?? match?.id ?? null
+  }
+
+  const normalizeTeamLabel = (value) =>
+    String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+
+  /** Every label a team might be listed under in the pick history. */
+  function teamLabelIndex(league) {
+    const index = new Map()
+    for (const team of league?.teams ?? []) {
+      if (team?.id == null) continue
+      const labels = [
+        team.name,
+        `${team.location ?? ''} ${team.nickname ?? ''}`,
+        team.abbrev,
+      ]
+      for (const label of labels) {
+        const key = normalizeTeamLabel(label)
+        if (key && !index.has(key)) index.set(key, team.id)
+      }
+    }
+    return index
+  }
+
+  /**
+   * ESPN's pick-history tables, which carry the whole board.
+   *
+   * The API's read model (`mDraftDetail`) publishes only keepers while a draft
+   * is live -- every unmade row stays `playerId: -1` until the draft ends --
+   * so the socket is normally the only source of live picks. That leaves a
+   * hole: anything drafted while the tab was disconnected, or before the
+   * observer attached, is never seen at all. The draft room renders the full
+   * history in the DOM, so read it and let `mergeLiveSelections` reconcile.
+   *
+   * The fantasy team is read from the row rather than derived from the pick
+   * number. That matters in keeper leagues: keeper rounds are assigned in a
+   * flat order rather than snaked, so the snake's parity is offset and any
+   * round-based slot arithmetic attributes picks to the wrong team.
+   */
+  function scanPickHistory(league) {
+    const tables = document.querySelectorAll?.('.pick-history-table') ?? []
+    if (!tables.length) return
+    const teamCount = Number(league?.settings?.size || league?.teams?.length || 0)
+    if (!teamCount) return
+    const teamIds = teamLabelIndex(league)
+    if (!teamIds.size) return
+
+    for (const table of tables) {
+      const caption = table.querySelector?.('[class*="caption"]')?.textContent || ''
+      const captionRound = Number((caption.match(/Round\s+(\d+)/i) || [])[1]) || 0
+      for (const row of table.querySelectorAll?.('[class*="rowWrapper"]') ?? []) {
+        // The headshot filename is the player id. Anchor on it rather than the
+        // first digits in the URL: ESPN serves these through a combiner whose
+        // query string carries its own numbers.
+        const source = row.querySelector?.('img')?.getAttribute('src') || ''
+        const playerId = (/\/(\d{2,10})\.png/.exec(source) || /(\d{4,10})/.exec(source) || [])[1]
+        if (!playerId) continue
+
+        // Each column is rendered twice (fixed and scrolling groups), so
+        // collapse the repeats rather than assuming how many groups exist.
+        const cells = []
+        for (const cell of row.querySelectorAll?.('[class*="cellContent"]') ?? []) {
+          const text = cell.textContent.replace(/\s+/g, ' ').trim()
+          if (cells[cells.length - 1] !== text) cells.push(text)
+        }
+        const overall = Number(cells[0])
+        if (!(overall > 0)) continue
+        const teamId = teamIds.get(normalizeTeamLabel(cells[2]))
+        if (!teamId) continue
+
+        rememberLiveSelection(
+          teamId,
+          playerId,
+          0,
+          {
+            overallPickNumber: overall,
+            roundId: captionRound || Math.ceil(overall / teamCount),
+            roundPickNumber: ((overall - 1) % teamCount) + 1,
+          },
+          false,
+        )
+      }
+    }
   }
 
   /**
@@ -511,7 +805,7 @@
     return `${entries}.${value}.${keepers}`
   }
 
-  function fingerprint(leagueId, season, teamId, league) {
+  function fingerprint(leagueId, season, teamId, league, clock) {
     const picks = league?.draftDetail?.picks ?? []
     const last = picks[picks.length - 1]
     return [
@@ -530,6 +824,7 @@
       league?.settings?.draftSettings?.keeperCount ?? '',
       keeperStamp(league),
       playersAt,
+      clockStamp(clock),
     ].join(':')
   }
 
@@ -612,12 +907,16 @@
     }
 
     ensureDraftObserver()
+    // History first: it is the most complete source, and the activity column
+    // only reaches back as far as its visible messages.
+    scanPickHistory(league)
     scanDraftActivity(league)
     league = mergeLiveSelections(league)
     cachedLeague = league
     cachedLeagueKey = leagueKey
 
-    const stamp = fingerprint(leagueId, season, teamId, league)
+    const clock = currentClock()
+    const stamp = fingerprint(leagueId, season, teamId, league, clock)
     if (stamp === lastPosted) return
     lastPosted = stamp
     lastError = ''
@@ -632,6 +931,7 @@
       swid: readCookie('SWID') || memberId || undefined,
       fetchedAt: Date.now(),
       isPractice: practice,
+      clock,
       league: trimRosters(league),
       // Omitted when unchanged; the worker keeps serving the last list it saw.
       players: playersChanged ? playersCache : undefined,
@@ -739,7 +1039,17 @@
   timer = window.setInterval(() => {
     void pull()
   }, interval)
+  // The clock ticks every second; the league poll does not. Read the page
+  // clock on that cadence and post only when endsAt jumps (new pick / pause).
+  if (/\/(?:football\/)?draft(?:\/|$)/i.test(location.pathname)) {
+    clockTicker = window.setInterval(() => {
+      const fromDom = readClockFromDom()
+      if (fromDom) ingestDomClock(fromDom)
+      scheduleClockPost()
+    }, 1000)
+  }
   window.addEventListener('beforeunload', () => {
     if (timer) window.clearInterval(timer)
+    if (clockTicker) window.clearInterval(clockTicker)
   })
 })()

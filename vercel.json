@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/sleeper/:path*",
+      "destination": "https://api.sleeper.app/:path*"
+    },
+    {
+      "source": "/draft/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/players",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -92,6 +92,7 @@ window.addEventListener('message', (event) => {
       season: event.data.season,
       teamId: event.data.teamId,
       url: event.data.url,
+      returnToApp: Boolean(event.data.returnToApp),
     })
     window.postMessage({ source: SOURCE, type: 'OPEN_SITE_ACK', provider: event.data.provider }, '*')
     return
@@ -103,6 +104,7 @@ window.addEventListener('message', (event) => {
       season: event.data.season,
       teamId: event.data.teamId,
       url: event.data.url,
+      returnToApp: Boolean(event.data.returnToApp),
     })
     window.postMessage({ source: SOURCE, type: 'OPEN_ESPN_ACK' }, '*')
     return

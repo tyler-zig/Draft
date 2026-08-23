@@ -127,6 +127,7 @@
 .pi-projection-grid > div.available { border-style: solid; border-color: #2a4a44; background: #0f1c22; }
 .pi-projection-grid small, .pi-projection-grid b, .pi-projection-grid span { display: block; }
 .pi-projection-grid small { min-height: 26px; color: #8498a1; font-size: 10px; line-height: 1.25; text-transform: uppercase; } .pi-projection-grid b { font-size: 18px; } .pi-projection-grid span { color: #71858e; font-size: 9px; letter-spacing: .06em; }
+.pi-projection-grid b .cc-proj-hover { display: inline; color: inherit; font-size: inherit; letter-spacing: inherit; }
 .pi-history { margin-top: 12px; } .pi-history > div:first-child { display: flex; align-items: center; justify-content: space-between; color: #a6b5bb; font-size: 11px; } .pi-history > div:first-child b { color: var(--pi-teal); }
 .pi-bars { display: flex; height: 72px; align-items: flex-end; gap: 3px; margin-top: 8px; padding: 5px 3px 0; border-bottom: 1px solid #334650; background: repeating-linear-gradient(to bottom, transparent 0 22px, #1e2c35 23px); }
 .pi-bars i { flex: 1; min-height: 3px; border-radius: 2px 2px 0 0; background: linear-gradient(#59c8ad, #286b5b); }

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Player } from '../providers/types'
+
+vi.mock('../supabase/artifacts', () => ({
+  readRankingArtifact: async () => null,
+}))
 import {
   attachProjectedAdp,
   clearNflProjectionsCache,
@@ -9,6 +13,7 @@ import {
   projectionAdp,
   projectionPointsPool,
   projectionSeason,
+  scoreBreakdown,
   viewPlayerProjection,
   type PlayerProjection,
 } from './playerProjections'
@@ -42,6 +47,7 @@ const back = {
   week: null,
   company: 'rotowire',
   last_modified: 1787298655629,
+  player: { first_name: 'Real', last_name: 'Player', position: 'RB', team: 'CHI' },
   stats: {
     gp: 17,
     pts_ppr: 250,
@@ -59,6 +65,9 @@ function projection(overrides: Partial<PlayerProjection> = {}): PlayerProjection
   return {
     sleeperId: 'one',
     season: '2026',
+    name: 'Real Player',
+    team: 'CHI',
+    position: 'RB',
     games: 17,
     stats: { gp: 17, pts_ppr: 250, pts_half_ppr: 230, pts_std: 210, rush_att: 280, rec: 40 },
     pointsPpr: 250,
@@ -91,6 +100,11 @@ describe('parseSleeperProjections', () => {
       updatedAt: 1787298655629,
     })
     expect(map.get('4046')?.stats.pass_att).toBe(555)
+  })
+
+  it('keeps the name Sleeper prints on the projection row', () => {
+    const map = parseSleeperProjections([back], '2026')
+    expect(map.get('one')).toMatchObject({ name: 'Real Player', team: 'CHI', position: 'RB' })
   })
 
   it('keeps ADP published on the projection row and merges a separate ADP-only row', () => {
@@ -165,8 +179,23 @@ describe('viewPlayerProjection', () => {
       receptions: 40,
       targets: null,
       source: 'RotoWire via Sleeper',
+      breakdown: [],
     })
     expect(viewPlayerProjection({ id: 'two', sleeperId: 'two' }, map, 'ppr')).toBeNull()
+  })
+})
+
+describe('scoreBreakdown', () => {
+  it('scores each source line with the league format', () => {
+    const row = projection({
+      breakdown: [
+        { id: 'cbs', label: 'CBS', stats: { rush_yd: 1000, rec: 40, rec_yd: 400 }, games: 17, points: null },
+        { id: 'espn', label: 'ESPN', stats: { rush_yd: 1200, rec: 50, rec_yd: 500 }, games: 17, points: null },
+      ],
+    })
+    const lines = scoreBreakdown(row, 'ppr')
+    expect(lines[0]?.points).toBe(180)
+    expect(lines[1]?.points).toBe(220)
   })
 })
 
@@ -174,7 +203,7 @@ describe('projectionPointsPool', () => {
   it('emits sleeper-id entries scored to the league format', () => {
     const map = parseSleeperProjections([back], '2026')
     expect(projectionPointsPool(map, 'ppr')).toEqual([
-      { gsisId: null, espnId: null, sleeperId: 'one', name: '', position: '', points: 250 },
+      { gsisId: null, espnId: null, sleeperId: 'one', name: 'Real Player', position: 'RB', points: 250 },
     ])
   })
 })
@@ -187,10 +216,11 @@ describe('getNflProjections', () => {
     const second = await getNflProjections('2026')
     expect(first.get('4046')?.pointsPpr).toBe(286.68)
     expect(second).toBe(first)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const requested = String(fetchMock.mock.calls.at(0)?.at(0) ?? '')
-    expect(requested).toContain('/sleeper/projections/nfl/2026')
-    expect(requested).toContain('season_type=regular')
+    const requested = fetchMock.mock.calls.map((call) => String(call.at(0) ?? ''))
+    const sleeperCalls = requested.filter((url) => url.includes('/sleeper/projections/nfl/2026'))
+    expect(sleeperCalls).toHaveLength(6)
+    expect(sleeperCalls.every((url) => url.includes('position='))).toBe(true)
+    expect(requested.some((url) => url.includes('position[]'))).toBe(false)
   })
 })
 

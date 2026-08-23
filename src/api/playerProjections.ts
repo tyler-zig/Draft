@@ -1,4 +1,6 @@
 import type { Player, ScoringType } from '../providers/types'
+import { readRankingArtifact } from '../supabase/artifacts'
+import { mergeCollectedProjections, parseCollectedProjections, type ProjectionSourceLine } from './collectedProjections'
 import type { ProjectedPointsEntry } from './playerHistorical'
 
 const POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'] as const
@@ -9,6 +11,10 @@ const cache = new Map<string, Map<string, PlayerProjection>>()
 export interface PlayerProjection {
   sleeperId: string
   season: string
+  name: string
+  team: string | null
+  position: string | null
+  espnId?: string | null
   games: number | null
   stats: Record<string, number>
   pointsPpr: number | null
@@ -19,6 +25,7 @@ export interface PlayerProjection {
   adpHalf: number | null
   adpStd: number | null
   source: string
+  breakdown?: ProjectionSourceLine[]
   updatedAt: number | null
 }
 
@@ -32,6 +39,7 @@ export interface PlayerProjectionView {
   source: string
   updatedAt: number | null
   season: string
+  breakdown: ProjectionSourceLine[]
 }
 
 export function projectionSeason(explicit?: string | null): string {
@@ -51,6 +59,14 @@ export async function getNflProjections(season: string, signal?: AbortSignal): P
   const data = await loadProjections(key, signal)
   cache.set(key, data)
   return data
+}
+
+export function volumeFormatPoints(stats: Record<string, number>): Pick<PlayerProjection, 'pointsPpr' | 'pointsHalf' | 'pointsStd'> {
+  return {
+    pointsPpr: volumePoints(stats, 1),
+    pointsHalf: volumePoints(stats, 0.5),
+    pointsStd: volumePoints(stats, 0),
+  }
 }
 
 const SCORING_STAT_KEYS = [
@@ -88,11 +104,14 @@ export function projectedPointsFor(
 }
 
 export function lookupPlayerProjection(
-  player: Pick<Player, 'id' | 'sleeperId'>,
+  player: Pick<Player, 'id' | 'sleeperId' | 'espnId'>,
   projections: Map<string, PlayerProjection> | undefined,
 ): PlayerProjection | null {
   if (!projections?.size) return null
-  return (player.sleeperId ? projections.get(player.sleeperId) : undefined) ?? projections.get(player.id) ?? null
+  return (player.sleeperId ? projections.get(player.sleeperId) : undefined)
+    ?? (player.espnId ? projections.get(player.espnId) : undefined)
+    ?? projections.get(player.id)
+    ?? null
 }
 
 export function projectionAdp(projection: PlayerProjection, scoring: ScoringType): number | null {
@@ -140,6 +159,7 @@ export function viewPlayerProjection(
     source: projection.source,
     updatedAt: projection.updatedAt,
     season: projection.season,
+    breakdown: scoreBreakdown(projection, scoring, options?.scoringSettings, options?.receptionOverride),
   }
 }
 
@@ -153,25 +173,62 @@ export function projectionPointsPool(
   for (const projection of projections.values()) {
     const points = projectedPointsFor(projection, scoring, settings)
     if (points == null) continue
+    const breakdown = scoreBreakdown(projection, scoring, settings)
     entries.push({
       gsisId: null,
-      espnId: null,
+      espnId: projection.espnId ?? null,
       sleeperId: projection.sleeperId,
-      name: '',
-      position: '',
+      name: projection.name ?? '',
+      position: projection.position ?? '',
       points,
+      ...(breakdown.length ? { breakdown } : {}),
     })
   }
   return entries
 }
 
+export function scoreBreakdown(
+  projection: PlayerProjection,
+  scoring: ScoringType,
+  settings?: Record<string, number> | null,
+  receptionOverride?: number | null,
+): ProjectionSourceLine[] {
+  const lines = projection.breakdown ?? []
+  if (!lines.length) return []
+  return lines.map((line) => ({
+    ...line,
+    points: projectedPointsFor({ ...projection, stats: line.stats, ...volumeFormatPoints(line.stats) }, scoring, settings, receptionOverride),
+  }))
+}
+
 async function loadProjections(season: string, signal?: AbortSignal): Promise<Map<string, PlayerProjection>> {
-  const params = new URLSearchParams({ season_type: 'regular' })
-  for (const position of POSITIONS) params.append('position[]', position)
-  const response = await fetch(`/sleeper/projections/nfl/${encodeURIComponent(season)}?${params}`, { signal })
-  if (!response.ok) throw new Error(`Sleeper projections failed (${response.status})`)
-  const payload = await response.json() as unknown
-  return parseSleeperProjections(payload, season)
+  // One request per position, no `position[]`. Vercel's external rewrite
+  // forwards `position=QB` and each board stays under ~1 MB. The old
+  // `position[]=QB&position[]=RB…` query is dropped on the way through, and
+  // the unfiltered season dump is 8.6 MB — over Vercel's proxy cap — so
+  // production got an empty map and VORP stayed blank.
+  const [payloads, collected] = await Promise.all([
+    Promise.all(POSITIONS.map(async (position) => {
+      const params = new URLSearchParams({ season_type: 'regular', position })
+      const response = await fetch(`/sleeper/projections/nfl/${encodeURIComponent(season)}?${params}`, { signal })
+      if (!response.ok) throw new Error(`Sleeper projections failed (${response.status})`)
+      const payload = await response.json() as unknown
+      return Array.isArray(payload) ? payload : []
+    })),
+    loadCollectedProjections(signal),
+  ])
+  const sleeper = parseSleeperProjections(payloads.flat(), season)
+  return mergeCollectedProjections(sleeper, collected, season, volumeFormatPoints)
+}
+
+async function loadCollectedProjections(signal?: AbortSignal) {
+  try {
+    const payload = await readRankingArtifact('projections-latest', 'projections/latest.json', { signal })
+    return parseCollectedProjections(payload)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error
+    return []
+  }
 }
 
 export function parseSleeperProjections(payload: unknown, season: string): Map<string, PlayerProjection> {
@@ -207,9 +264,11 @@ function parseRow(value: unknown, season: string): PlayerProjection | null {
   const stats = numericStats(row.stats)
   if (!hasVolume(stats)) return null
   const fields = adpFields(stats)
+  const identity = playerIdentity(row)
   return {
     sleeperId,
     season: text(row.season) ?? season,
+    ...identity,
     games: stats.gp ?? null,
     stats,
     pointsPpr: stats.pts_ppr ?? null,
@@ -218,6 +277,18 @@ function parseRow(value: unknown, season: string): PlayerProjection | null {
     ...fields,
     source: sourceLabel(text(row.company)),
     updatedAt: timestamp(row.last_modified) ?? timestamp(row.updated_at),
+  }
+}
+
+function playerIdentity(row: Record<string, unknown>): { name: string; team: string | null; position: string | null } {
+  const player = record(row.player)
+  const first = text(player?.first_name)
+  const last = text(player?.last_name)
+  const combined = [first, last].filter(Boolean).join(' ')
+  return {
+    name: combined || text(player?.full_name) || text(row.full_name) || '',
+    team: text(player?.team) ?? text(row.team),
+    position: text(player?.position) ?? text(row.position),
   }
 }
 
@@ -266,6 +337,7 @@ function adpStub(sleeperId: string, season: string, row: Record<string, unknown>
   return {
     sleeperId,
     season: text(row.season) ?? season,
+    ...playerIdentity(row),
     games: null,
     stats: {},
     pointsPpr: null,
@@ -275,6 +347,22 @@ function adpStub(sleeperId: string, season: string, row: Record<string, unknown>
     source: 'Sleeper ADP',
     updatedAt: timestamp(row.last_modified) ?? timestamp(row.updated_at),
   }
+}
+
+function volumePoints(stats: Record<string, number>, receptionRate: number): number | null {
+  let total = 0
+  let matched = false
+  for (const [key, rate] of Object.entries({ ...DEFAULT_RATES, fum_lost: -2, pass_2pt: 2, rush_2pt: 2, rec_2pt: 2, fgm: 3, xpm: 1 })) {
+    const amount = stats[key]
+    if (typeof amount !== 'number') continue
+    matched = true
+    total += amount * rate
+  }
+  if (typeof stats.rec === 'number') {
+    matched = true
+    total += stats.rec * receptionRate
+  }
+  return matched ? total : null
 }
 
 function formatPoints(projection: PlayerProjection, scoring: ScoringType): number | null {

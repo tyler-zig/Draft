@@ -179,6 +179,6 @@ export function attachProjectedPoints(players: Player[], pool: ProjectedPointsEn
       byNamePos.get(`${normalizeName(player.fullName)}|${normalizePos(player.position)}`) ??
       undefined
     if (!entry) return player
-    return { ...player, projectedPoints: entry.points }
+    return { ...player, projectedPoints: entry.points, projectionBreakdown: entry.breakdown }
   })
 }

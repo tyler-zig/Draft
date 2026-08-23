@@ -94,6 +94,13 @@ export interface DraftSession {
   teams: number
   rounds: number
   pickTimer: number | null
+  /**
+   * When the current pick expires, from a live host clock. Null when the
+   * site only publishes the configured timeout (`pickTimer`) or the clock
+   * is paused.
+   */
+  clockEndsAt?: number | null
+  clockPaused?: boolean
   slots: SlotCounts
   rosterPositions: string[]
   order: DraftSlot[]
@@ -199,10 +206,13 @@ export interface Player {
     fetchedAt: number
   }>
   /**
-   * Season projection scored to the connected league's format, from Sleeper's
+   * Season projection scored to the connected league's format, from the
+   * collected CBS / ESPN / FantasySharks consensus blended with Sleeper's
    * RotoWire feed. Blank when no projection row is published for the player.
    */
   projectedPoints?: number | null
+  /** Per-source season lines behind the consensus projection, when collected. */
+  projectionBreakdown?: import('../api/collectedProjections').ProjectionSourceLine[]
   /** Value over the replacement-level player at the same position. */
   vorp?: number | null
   /**

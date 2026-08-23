@@ -5,6 +5,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectPage } from './ConnectPage'
 import type { SavedLeague } from '../leagues/savedLeagues'
 
+const requestOpenEspn = vi.fn()
+const requestOpenSite = vi.fn()
+
+vi.mock('../espn/bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../espn/bridge')>()),
+  requestOpenEspn: (...args: unknown[]) => requestOpenEspn(...args),
+}))
+
+vi.mock('../sites/bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../sites/bridge')>()),
+  requestOpenSite: (...args: unknown[]) => requestOpenSite(...args),
+}))
+
 vi.mock('../espn/useEspnBridge', () => ({
   useEspnBridge: () => ({ installed: false, hydrated: true, snapshot: null, refresh: vi.fn() }),
 }))
@@ -83,7 +96,11 @@ function renderPage() {
 }
 
 describe('ConnectPage', () => {
-  beforeEach(() => localStorage.clear())
+  beforeEach(() => {
+    localStorage.clear()
+    requestOpenEspn.mockReset()
+    requestOpenSite.mockReset()
+  })
 
   it('opens the selected saved league from the launch pad', () => {
     localStorage.setItem('draft-assistant:saved-leagues', JSON.stringify([saved()]))
@@ -93,6 +110,23 @@ describe('ConnectPage', () => {
     expect(pane).toBeTruthy()
     expect(within(pane as HTMLElement).getByRole('link', { name: 'Open draft room' })).toHaveAttribute('href', '/draft/sleeper/D1?userId=u1')
     expect(within(pane as HTMLElement).getByRole('link', { name: 'Players' })).toHaveAttribute('href', '/players?scoring=ppr&provider=sleeper&leagueId=L1&draftId=D1')
+  })
+
+  it('refreshes the ESPN league tab when reopening a saved room', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('draft-assistant:saved-leagues', JSON.stringify([
+      saved({ provider: 'espn', leagueId: '123', draftId: '2026:123', externalUserId: '7', name: 'Home League' }),
+    ]))
+    renderPage()
+    await user.click(screen.getByRole('link', { name: 'Open draft room' }))
+    expect(requestOpenEspn).toHaveBeenCalledWith({
+      leagueId: '123',
+      season: '2026',
+      teamId: '7',
+      page: 'team',
+      returnToApp: true,
+    })
+    expect(requestOpenSite).not.toHaveBeenCalled()
   })
 
   it('forgets the selected league and returns to the empty lobby', async () => {

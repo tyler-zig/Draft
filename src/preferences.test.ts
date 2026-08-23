@@ -28,6 +28,20 @@ describe('persisted preferences', () => {
     expect(loadTableColumns()).toEqual(['liveAdp', 'player'])
   })
 
+  it('inserts vs 1d / vs 7d after Live ADP on the previous default board', () => {
+    localStorage.setItem('draft-assistant:table-columns', JSON.stringify([
+      'rank', 'player', 'position', 'team', 'tier', 'adp', 'liveAdp', 'projection', 'vorp', 'value', 'sos',
+    ]))
+    expect(loadTableColumns()).toEqual([
+      'rank', 'player', 'position', 'team', 'tier', 'adp', 'liveAdp', 'liveAdp1d', 'liveAdp7d', 'projection', 'vorp', 'value', 'sos',
+    ])
+  })
+
+  it('leaves a customized board without the change columns alone', () => {
+    saveTableColumns(['rank', 'player', 'liveAdp', 'vorp'])
+    expect(loadTableColumns()).toEqual(['rank', 'player', 'liveAdp', 'vorp'])
+  })
+
   it('defaults draft sounds on and persists a mute', () => {
     expect(loadDraftSounds()).toBe(true)
     saveDraftSounds(false)

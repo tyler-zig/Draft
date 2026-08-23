@@ -13,20 +13,13 @@ import {
   type CollectedSnapshot,
   type Granularity,
 } from '../rankings/collected'
+import { fetchLiveAdpSnapshot, type LiveAdpSnapshot } from '../rankings/liveAdp'
+import { hostedCollectorSources, hostedFreshness, relativeAge } from '../rankings/hostedSources'
+import { clearArtifactVersionCache } from '../supabase/artifacts'
 import type { Player } from '../providers/types'
 import { Select } from './Select'
 
 const POLL_MS = 1000
-
-function ago(timestamp: number): string {
-  const seconds = Math.round((Date.now() - timestamp) / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 48) return `${hours}h ago`
-  return `${Math.round(hours / 24)}d ago`
-}
 
 export function ScraperPanel({
   directory,
@@ -38,7 +31,8 @@ export function ScraperPanel({
   const [status, setStatus] = useState<ScrapeStatus | null>(null)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [snapshot, setSnapshot] = useState<CollectedSnapshot | null>(null)
-  const [selected, setSelected] = useState<SourceGroup[]>(['fantasypros', 'rotowire', 'espn'])
+  const [adp, setAdp] = useState<LiveAdpSnapshot | null>(null)
+  const [selected, setSelected] = useState<SourceGroup[]>(['fantasypros', 'fantasypros-adp', 'rotowire', 'espn'])
   const [granularity, setGranularity] = useState<Granularity>('format')
   const [concurrency, setConcurrency] = useState(4)
   const [ignoreRobots, setIgnoreRobots] = useState(false)
@@ -46,20 +40,19 @@ export function ScraperPanel({
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const logRef = useRef<HTMLPreElement>(null)
-
   const wasRunning = useRef(false)
 
-  const refreshSnapshot = useCallback(async () => {
+  const refreshSnapshots = useCallback(async () => {
+    clearArtifactVersionCache()
     try {
-      setSnapshot(await fetchCollectedSnapshot())
+      const [nextRankings, nextAdp] = await Promise.all([fetchCollectedSnapshot(), fetchLiveAdpSnapshot()])
+      setSnapshot(nextRankings)
+      setAdp(nextAdp)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
   }, [])
 
-  // Polls the collector and reloads the snapshot whenever a run finishes.
-  // Fast while a run is in flight, slow otherwise so a collection started from
-  // a terminal still shows up here.
   useEffect(() => {
     let cancelled = false
     const controller = new AbortController()
@@ -71,14 +64,13 @@ export function ScraperPanel({
         if (cancelled) return
         setAvailable(true)
         setStatus(next)
-        if (first || (wasRunning.current && !next.running)) await refreshSnapshot()
+        if (first || (wasRunning.current && !next.running)) await refreshSnapshots()
         wasRunning.current = next.running
       } catch (caught) {
         if (cancelled) return
         if (caught instanceof NoCollectorError) {
           setAvailable(false)
-          // No collector here, but a snapshot committed to disk may still exist.
-          if (first) await refreshSnapshot()
+          if (first) await refreshSnapshots()
         }
       } finally {
         first = false
@@ -92,7 +84,7 @@ export function ScraperPanel({
       controller.abort()
       clearInterval(timer)
     }
-  }, [status?.running, refreshSnapshot])
+  }, [status?.running, refreshSnapshots])
 
   useEffect(() => {
     const node = logRef.current
@@ -122,7 +114,7 @@ export function ScraperPanel({
     setBusy(true)
     try {
       const current = snapshot ?? (await fetchCollectedSnapshot())
-      if (!current) throw new Error('No snapshot on disk yet. Run a collection first.')
+      if (!current) throw new Error('No hosted snapshot yet. Wait for the next Supabase Cron run.')
       const sets = await installCollectedSets(current, directory, granularity)
       setNotice(`Loaded ${sets.length} ranking ${sets.length === 1 ? 'set' : 'sets'}. Enable them in the recipe.`)
       await onChange()
@@ -135,29 +127,68 @@ export function ScraperPanel({
 
   const running = status?.running ?? false
   const result = status?.result
+  const sources = hostedCollectorSources(snapshot, adp)
+  const boardsAge = relativeAge(snapshot?.fetchedAt)
+  const adpAge = relativeAge(adp?.fetchedAt)
 
   return (
-    <section className="rounded border border-line bg-panel-2 p-3 text-sm">
-      <header className="mb-2 flex items-center gap-2">
-        <h3 className="font-semibold">Rankings collector</h3>
-        {snapshot ? (
-          <span className="text-xs text-muted">
-            snapshot {ago(snapshot.fetchedAt)} · {snapshot.stats.sets} boards ·{' '}
-            {snapshot.stats.players} players
-          </span>
-        ) : (
-          <span className="text-xs text-muted">no snapshot yet</span>
-        )}
+    <section className="cc-rk-hosted">
+      <header>
+        <h3>Rankings collector</h3>
+        <span>
+          Boards {boardsAge}
+          {snapshot ? ` · ${snapshot.stats.sets} boards` : ''}
+          {' · '}Live ADP {adpAge}
+          {adp?.sets?.length ? ` · ${adp.sets.length} boards` : ''}
+        </span>
       </header>
+      <p>
+        Supabase Cron publishes these to the hosted app. Expert boards refresh about every 6 hours.
+        Real-Time ADP is its own job every 15 minutes and does not wait on that snapshot.
+      </p>
+
+      <div className="cc-rk-hosted-sources">
+        {sources.map((source) => (
+          <div key={source.id} className={`cc-rk-hosted-source ${source.present ? '' : 'off'}`}>
+            <div>
+              <b>{source.label}</b>
+              <small>{source.detail}</small>
+            </div>
+            <time>{relativeAge(source.fetchedAt)}</time>
+            <i className={`cc-rk-dot ${hostedFreshness(source)}`} aria-hidden="true" />
+          </div>
+        ))}
+      </div>
+
+      <div className="cc-rk-hosted-actions">
+        <label>
+          Load as
+          <Select
+            value={granularity}
+            onChange={(event) => setGranularity(event.target.value as Granularity)}
+            className="rounded border border-line bg-panel px-1.5 py-0.5"
+          >
+            <option value="format">One set per scoring format</option>
+            <option value="board">One set per board (~74)</option>
+          </Select>
+        </label>
+        <button
+          type="button"
+          className="cc-rk-primary"
+          onClick={() => void install()}
+          disabled={busy || running || !snapshot}
+        >
+          {busy ? 'Loading…' : 'Load into rankings'}
+        </button>
+      </div>
 
       {available === false ? (
-        <p className="rounded bg-panel px-3 py-2 text-xs text-muted">
-          The collector runs on the dev server and is not attached to this build. Run{' '}
-          <code className="text-accent">npm run dev</code>, or collect from a terminal with{' '}
-          <code className="text-accent">npm run scrape:rankings</code>.
+        <p className="cc-rk-hosted-note">
+          Local collect stays on the dev server. Production reads the hosted snapshots above.
         </p>
-      ) : (
-        <>
+      ) : available ? (
+        <details className="cc-rk-local">
+          <summary>Collect locally</summary>
           <div className="mb-2 flex flex-wrap gap-3">
             {SOURCE_GROUPS.map((source) => (
               <label key={source.id} className="flex items-start gap-1.5 text-xs">
@@ -189,19 +220,7 @@ export function ScraperPanel({
               />
             </label>
 
-            <label className="flex items-center gap-1.5">
-              Load as
-              <Select
-                value={granularity}
-                onChange={(event) => setGranularity(event.target.value as Granularity)}
-                className="rounded border border-line bg-panel px-1.5 py-0.5"
-              >
-                <option value="format">One set per scoring format</option>
-                <option value="board">One set per board (~74)</option>
-              </Select>
-            </label>
-
-            <label className="flex items-center gap-1.5" title="Needed for FantasyPros Real-Time ADP, whose data lives under a /json/ path their robots.txt disallows. For every other source it only drops the crawl-delay and the check that would notice a source's terms changing.">
+            <label className="flex items-center gap-1.5" title="Needed when partners.fantasypros.com blocks the Real-Time ADP API. Other sources are already allowed.">
               <input
                 type="checkbox"
                 checked={ignoreRobots}
@@ -220,14 +239,6 @@ export function ScraperPanel({
               className="rounded bg-accent px-3 py-1 text-xs font-semibold text-bg disabled:opacity-60"
             >
               {running ? (status?.phase === 'publishing' ? 'Publishing…' : 'Collecting…') : 'Collect now'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void install()}
-              disabled={busy || running || !snapshot}
-              className="rounded border border-line px-3 py-1 text-xs font-semibold disabled:opacity-60"
-            >
-              Load into rankings
             </button>
             {result && !running ? (
               <span className="text-xs text-muted">
@@ -263,11 +274,11 @@ export function ScraperPanel({
               ) : null}
             </ul>
           ) : null}
-        </>
-      )}
+        </details>
+      ) : null}
 
-      {notice ? <p className="mt-2 text-xs text-accent">{notice}</p> : null}
-      {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
+      {notice ? <p className="cc-expert-notice">{notice}</p> : null}
+      {error ? <p className="cc-expert-error">{error}</p> : null}
     </section>
   )
 }

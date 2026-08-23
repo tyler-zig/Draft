@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Player } from '../providers/types'
-import { applyLiveAdp, fetchLiveAdpSnapshot, liveAdpRowsForTeams, nearestLiveAdpTeams, liveAdpScoringSlug, draftWizardAdpSetId, fantasyProsRtAdpSetId, isLiveAdpFresh, LIVE_ADP_MAX_AGE_MS } from './liveAdp'
+import { applyLiveAdp, fetchLiveAdpSnapshot, formatLiveAdpChange, liveAdpChangeTone, liveAdpRowsForTeams, nearestLiveAdpTeams, liveAdpScoringSlug, draftWizardAdpSetId, fantasyProsRtAdpSetId, isLiveAdpFresh, LIVE_ADP_MAX_AGE_MS } from './liveAdp'
 import type { LiveAdpSnapshot } from './liveAdp'
 
 vi.mock('../supabase/artifacts', () => ({
@@ -210,5 +210,17 @@ describe('a stale board is not a live board', () => {
     expect(isLiveAdpFresh(snapshot(60_000))).toBe(true)
     expect(isLiveAdpFresh(snapshot(LIVE_ADP_MAX_AGE_MS + 60_000))).toBe(false)
     expect(isLiveAdpFresh(null)).toBe(false)
+  })
+})
+
+describe('live ADP change display', () => {
+  it('prints FantasyPros vs as an earlier/later arrow', () => {
+    expect(formatLiveAdpChange(9.3)).toBe('↑ 9.3')
+    expect(formatLiveAdpChange(-5)).toBe('↓ 5.0')
+    expect(formatLiveAdpChange(0)).toBe('0.0')
+    expect(formatLiveAdpChange(null)).toBe('—')
+    expect(liveAdpChangeTone(9.3)).toBe('cc-up')
+    expect(liveAdpChangeTone(-5)).toBe('cc-down')
+    expect(liveAdpChangeTone(0)).toBe('')
   })
 })

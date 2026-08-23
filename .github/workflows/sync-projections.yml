@@ -1,0 +1,75 @@
+name: Sync season projections
+
+# FantasySharks publishes Crawl-delay: 60. Honouring that across six position
+# CSVs is several minutes of wall clock, which is above the Edge Function cap.
+# This job is the scheduled writer; the Node collector is the same script a
+# local `npm run scrape:projections` runs.
+
+on:
+  schedule:
+    # Six-hourly, offset from the ranking and intelligence crons.
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'Fantasy season year (blank = current)'
+        required: false
+        type: string
+      only:
+        description: 'Source groups (fantasysharks,cbs,espn)'
+        required: false
+        type: string
+
+concurrency:
+  group: sync-projections
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DATA_BUCKET: ${{ secrets.SUPABASE_DATA_BUCKET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fail early if Supabase credentials are missing
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Set the SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY repository secrets."
+            exit 1
+          fi
+
+      - name: Collect and publish projections
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.season }}" ]; then
+            ARGS="$ARGS --season=${{ inputs.season }}"
+          fi
+          if [ -n "${{ inputs.only }}" ]; then
+            ARGS="$ARGS --only=${{ inputs.only }}"
+          fi
+          npm run scrape:projections -- $ARGS
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Season projections"
+            echo ""
+            if [ -f public/projections/latest.json ]; then
+              node -e 'const p=require("./public/projections/latest.json"); console.log("- Season: `"+p.season+"`"); console.log("- Players: `"+p.stats.players+"`"); console.log("- Boards: `"+p.stats.boards+"`"); console.log("- Failures: `"+p.stats.failures+"`")'
+            else
+              echo "No artifact was written."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

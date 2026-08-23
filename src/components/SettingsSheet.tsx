@@ -59,6 +59,9 @@ export function SettingsSheet({
   onOpenKeepers,
   onMockChange,
   onStartMock,
+  onMockLeague,
+  onClearMockLeague,
+  mockLeagueName = null,
 }: {
   leagueName: string
   providerLabel: string
@@ -83,6 +86,12 @@ export function SettingsSheet({
   onOpenKeepers: () => void
   onMockChange: (next: MockDraftSettings) => void
   onStartMock: () => void
+  /** Run a mock of the league currently open, keepers and all. */
+  onMockLeague?: () => void
+  /** Forget the seeded league so the next mock is a generated room again. */
+  onClearMockLeague?: () => void
+  /** Name of the league a seeded mock is standing in for, when there is one. */
+  mockLeagueName?: string | null
 }) {
   const [pane, setPane] = useState<Pane>(mock ? 'mock' : 'appearance')
   const sources = [...builtinSets, ...importedSets]
@@ -254,6 +263,17 @@ export function SettingsSheet({
                 <div className="cc-st-actions">
                   <button type="button" className="cc-rk-primary" onClick={onOpenKeepers}>Set keepers</button>
                 </div>
+                {onMockLeague ? <div className="cc-st-card">
+                  <div className="cc-st-row top">
+                    <div>
+                      <h4>Mock this league</h4>
+                      <p>Runs the draft engine against your real teams, roster slots and keepers. Nothing is sent to {providerLabel} — the mock is local and your league is untouched.</p>
+                    </div>
+                  </div>
+                  <div className="cc-st-actions">
+                    <button type="button" className="cc-rk-primary cc-st-wide" onClick={onMockLeague}>Run a mock of this league</button>
+                  </div>
+                </div> : null}
               </section>
             ) : null}
 
@@ -262,10 +282,11 @@ export function SettingsSheet({
                 <h3>Mock draft</h3>
                 <p className="cc-st-lead">Simulates the other teams with the survival spread model. A reachy room grabs anyone; a disciplined one sticks to the board. Kickers and defenses wait for the last round.</p>
                 <div className="cc-st-card">
+                  {/* A seeded league defines the room, so these describe nothing. */}
                   <div className="cc-st-mock-grid">
                     <label className="cc-st-field">
                       <span>Teams</span>
-                      <Select aria-label="Teams" value={mock.teams} onChange={(event) => {
+                      <Select aria-label="Teams" disabled={Boolean(mockLeagueName)} value={mock.teams} onChange={(event) => {
                         const teams = Number(event.target.value)
                         onMockChange({ ...mock, teams, yourSlot: Math.min(mock.yourSlot, teams) })
                       }}>
@@ -274,19 +295,19 @@ export function SettingsSheet({
                     </label>
                     <label className="cc-st-field">
                       <span>Rounds</span>
-                      <Select aria-label="Rounds" value={mock.rounds} onChange={(event) => onMockChange({ ...mock, rounds: Number(event.target.value) })}>
+                      <Select aria-label="Rounds" disabled={Boolean(mockLeagueName)} value={mock.rounds} onChange={(event) => onMockChange({ ...mock, rounds: Number(event.target.value) })}>
                         {MOCK_ROUNDS.map((rounds) => <option key={rounds} value={rounds}>{rounds} rounds</option>)}
                       </Select>
                     </label>
                     <label className="cc-st-field">
                       <span>Your slot</span>
-                      <Select aria-label="Your slot" value={mock.yourSlot} onChange={(event) => onMockChange({ ...mock, yourSlot: Number(event.target.value) })}>
+                      <Select aria-label="Your slot" disabled={Boolean(mockLeagueName)} value={mock.yourSlot} onChange={(event) => onMockChange({ ...mock, yourSlot: Number(event.target.value) })}>
                         {Array.from({ length: mock.teams }, (_, index) => index + 1).map((slot) => <option key={slot} value={slot}>Slot {slot}</option>)}
                       </Select>
                     </label>
                     <label className="cc-st-field">
                       <span>Scoring</span>
-                      <Select aria-label="Scoring" value={mock.scoring} onChange={(event) => onMockChange({ ...mock, scoring: event.target.value as ScoringType })}>
+                      <Select aria-label="Scoring" disabled={Boolean(mockLeagueName)} value={mock.scoring} onChange={(event) => onMockChange({ ...mock, scoring: event.target.value as ScoringType })}>
                         <option value="ppr">PPR</option>
                         <option value="half_ppr">Half PPR</option>
                         <option value="std">Standard</option>
@@ -319,7 +340,16 @@ export function SettingsSheet({
                     <Toggle pressed={mock.autoPick} label="Auto-draft my picks" onClick={() => onMockChange({ ...mock, autoPick: !mock.autoPick })} />
                   </div>
                 </div>
-                <p className="cc-st-lead cc-st-mock-note">The grades sheet opens when the mock finishes. Keepers stay off the board.</p>
+                {mockLeagueName ? <div className="cc-st-card">
+                  <div className="cc-st-row top">
+                    <div>
+                      <h4>Mocking {mockLeagueName}</h4>
+                      <p>Teams, roster slots and keepers come from that league, so the room settings above do not apply.</p>
+                    </div>
+                    {onClearMockLeague ? <button type="button" className="cc-rk-ghost" onClick={onClearMockLeague}>Use a generated room</button> : null}
+                  </div>
+                </div> : null}
+                <p className="cc-st-lead cc-st-mock-note">The grades sheet opens when the mock finishes. Keepers are drafted around: they hold the pick their team paid for.</p>
                 <div className="cc-st-actions">
                   <button type="button" className="cc-rk-primary cc-st-wide" onClick={onStartMock}>Start new mock</button>
                 </div>

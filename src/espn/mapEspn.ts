@@ -33,6 +33,15 @@ export interface EspnSnapshot {
   waiting?: boolean
   /** Set by the injector when ESPN's league subtype is a mock / practice clone. */
   isPractice?: boolean
+  /**
+   * Live remaining time on the current pick. ESPN's league API only publishes
+   * the configured timeout; this is scraped from the draft-room page / socket.
+   */
+  clock?: {
+    remaining: number
+    endsAt: number | null
+    paused?: boolean
+  } | null
   league?: EspnLeaguePayload
   players?: EspnPlayerEntry[]
   availableLeagues?: EspnAvailableLeague[]
@@ -642,6 +651,8 @@ export function mapEspnSession(
     teams: teamCount,
     rounds: Math.max(rosterPositions.length, 1),
     pickTimer: league.settings?.draftSettings?.pickTimeout ?? null,
+    clockEndsAt: snapshot.clock?.paused ? null : snapshot.clock?.endsAt ?? null,
+    clockPaused: Boolean(snapshot.clock?.paused),
     slots,
     rosterPositions,
     order,
@@ -672,6 +683,91 @@ const EMPTY_PICK_PLAYER_ID = -1
 
 function pickHasPlayer(pick: { playerId?: number }): boolean {
   return pick.playerId != null && pick.playerId !== EMPTY_PICK_PLAYER_ID && pick.playerId !== 0
+}
+
+/**
+ * The board slot a pick row holds, whether or not ESPN has stamped an overall
+ * number on it yet. Keeper reservations carry round and round-pick from the
+ * moment they are reserved, so those rebuild it.
+ */
+function boardOverall(pick: { overallPickNumber?: number; roundId?: number; roundPickNumber?: number }, teamCount: number): number {
+  const overall = Number(pick?.overallPickNumber)
+  if (overall > 0) return overall
+  const round = Number(pick?.roundId)
+  const roundPick = Number(pick?.roundPickNumber)
+  if (!(round > 0) || !(roundPick > 0) || !teamCount) return 0
+  return (round - 1) * teamCount + roundPick
+}
+
+/** Same league, same season -- the two snapshots describe one draft. */
+function sameDraft(a: EspnSnapshot, b: EspnSnapshot): boolean {
+  return Boolean(a.leagueId) && a.leagueId === b.leagueId && String(a.season ?? '') === String(b.season ?? '')
+}
+
+/** Rows ESPN has actually filled, keyed by the slot they hold. */
+function realPicksByOverall(snapshot: EspnSnapshot): Map<number, EspnRawPick> {
+  const league = snapshot.league
+  const picks = league?.draftDetail?.picks ?? []
+  const teamCount = Number(league?.settings?.size || league?.teams?.length || 0)
+  const map = new Map<number, EspnRawPick>()
+  for (const pick of picks) {
+    if (!pickHasPlayer(pick)) continue
+    const overall = boardOverall(pick, teamCount)
+    if (overall > 0 && !map.has(overall)) map.set(overall, pick)
+  }
+  return map
+}
+
+export function espnSnapshotPickCount(snapshot: EspnSnapshot | null | undefined): number {
+  return snapshot ? realPicksByOverall(snapshot).size : 0
+}
+
+/**
+ * Carries picks forward across snapshots of the same draft.
+ *
+ * ESPN's read model publishes only keepers while a draft is live -- every
+ * unmade row stays `playerId: -1` until the draft ends -- so live picks reach
+ * the app only from the extension's socket observer and page scrape. Anything
+ * that interrupts those (a disconnected draft tab, a reload, the extension
+ * starting late) produces a perfectly valid snapshot that happens to know
+ * about far fewer picks, and letting it replace the stored one wipes the board.
+ *
+ * So a snapshot may add picks but never silently drop them. The exception is a
+ * finished draft: once `drafted` is set, ESPN's read model is complete and
+ * authoritative, which is also what lets a rolled-back pick eventually clear.
+ *
+ * Everything other than the pick list is taken from the incoming snapshot --
+ * settings, teams, the clock and roster data should always be the newest read.
+ */
+export function mergeEspnSnapshots(cached: EspnSnapshot | null | undefined, incoming: EspnSnapshot): EspnSnapshot {
+  if (!cached?.league || !incoming.league) return incoming
+  if (!sameDraft(cached, incoming)) return incoming
+  // A completed draft is fully published, so it replaces rather than merges.
+  if (incoming.league.draftDetail?.drafted) return incoming
+
+  const known = realPicksByOverall(cached)
+  if (!known.size) return incoming
+  const fresh = realPicksByOverall(incoming)
+  const missing: EspnRawPick[] = []
+  for (const [overall, pick] of known) {
+    if (!fresh.has(overall)) missing.push(pick)
+  }
+  if (!missing.length) return incoming
+
+  const league = incoming.league
+  const teamCount = Number(league.settings?.size || league.teams?.length || 0)
+  // Drop the placeholder rows the retained picks are standing in for, so the
+  // board does not carry both a pick and an empty slot for one number.
+  const retainedOverall = new Set(missing.map((pick) => boardOverall(pick, teamCount)))
+  const kept = (league.draftDetail?.picks ?? [])
+    .filter((pick) => pickHasPlayer(pick) || !retainedOverall.has(boardOverall(pick, teamCount)))
+  return {
+    ...incoming,
+    league: {
+      ...league,
+      draftDetail: { ...league.draftDetail, picks: [...kept, ...missing] },
+    },
+  }
 }
 
 export function mapEspnPicks(snapshot: EspnSnapshot): DraftPick[] {
