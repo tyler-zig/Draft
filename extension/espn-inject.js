@@ -574,6 +574,7 @@
       return cursor
     }
     const picks = [...apiPicks]
+    const claimed = new Set()
     for (const selection of liveSelections) {
       if (confirmed.has(selection.playerId)) continue
       const suppliedOverall = Number(selection.overallPickNumber)
@@ -590,9 +591,15 @@
         lineupSlotId: selection.rosterSlotIndex,
         draftAssistantLive: true,
       })
+      claimed.add(overall)
       confirmed.add(selection.playerId)
     }
-    return { ...league, draftDetail: { ...league.draftDetail, picks } }
+    // ESPN keeps shipping its own empty row for a pick the observer just
+    // filled, so the board would carry two rows for one slot -- and because
+    // the cached snapshot merges forward, that duplicate is stored again on
+    // every poll. Drop the placeholder the live pick replaces.
+    const filled = picks.filter((pick) => pickHasPlayer(pick) || !claimed.has(boardOverall(pick)))
+    return { ...league, draftDetail: { ...league.draftDetail, picks: filled } }
   }
 
   function leaguesFromDom() {

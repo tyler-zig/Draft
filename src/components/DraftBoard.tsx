@@ -55,7 +55,7 @@ export function DraftBoard({
       <div
         className="cc-full-board-grid"
         style={{
-          gridTemplateColumns: `24px repeat(${session.teams}, minmax(0, 1fr))`,
+          gridTemplateColumns: `24px repeat(${session.teams}, minmax(68px, 1fr))`,
           gridTemplateRows: `auto repeat(${session.rounds}, minmax(0, 1fr))`,
         }}
       >

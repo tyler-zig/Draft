@@ -18,6 +18,7 @@ export interface SleeperLeague {
   roster_positions: string[] | null
   scoring_settings?: Record<string, number>
   settings?: Record<string, number>
+  metadata?: Record<string, string | undefined>
 }
 
 export interface SleeperLeagueUser {
@@ -49,6 +50,8 @@ export interface SleeperDraftSettings {
   slots_super_flex?: number
   slots_def?: number
   slots_bn?: number
+  /** 3 = 3rd-round reversal; 0 or omitted is a plain snake. */
+  reversal_round?: number
 }
 
 export interface SleeperDraft {
@@ -60,14 +63,31 @@ export interface SleeperDraft {
   season: string
   start_time: number | null
   last_picked?: number
+  creators?: string[] | null
   settings: SleeperDraftSettings
   metadata?: {
     scoring_type?: string
     name?: string
     description?: string
+    /** Sleeper's league type as a string; "3" is chopped. */
+    league_type?: string
+    /** Parent league for a `league_mock` room; the draft's own `league_id` is null. */
+    league_id?: string
+    /** `league_mock` for a cloned league mock; other mocks omit or say `mock`. */
+    type?: string
   }
   draft_order: Record<string, number> | null
   slot_to_roster_id: Record<string, number> | null
+}
+
+export interface SleeperTradedPick {
+  season?: string
+  round: number
+  /** Original owner of that round's pick. */
+  roster_id: number
+  previous_owner_id?: number
+  /** Current owner after the trade. */
+  owner_id: number
 }
 
 export interface SleeperPick {
@@ -168,6 +188,12 @@ export function getDraft(draftId: string) {
 
 export function getDraftPicks(draftId: string) {
   return sleeperGet<SleeperPick[]>(`/draft/${encodeURIComponent(draftId)}/picks`)
+}
+
+export function getDraftTradedPicks(draftId: string) {
+  return sleeperGet<SleeperTradedPick[]>(
+    `/draft/${encodeURIComponent(draftId)}/traded_picks`,
+  )
 }
 
 export function getNflPlayers() {

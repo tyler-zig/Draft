@@ -2,6 +2,7 @@ import { readPlayerCacheEntry, writePlayerCache } from '../api/playerCache'
 import {
   getDraft,
   getDraftPicks,
+  getDraftTradedPicks,
   getLeague,
   getLeagueDrafts,
   getLeagueUsers,
@@ -16,6 +17,14 @@ import {
   type SleeperPlayer,
 } from '../api/sleeper'
 import {
+  buildSleeperPickOwners,
+  detectLeagueFormat,
+  isSleeperMock,
+  sleeperClockEndsAt,
+  sleeperParentLeagueId,
+} from '../draft/sleeperBoard'
+import { parseSleeperRef } from '../draft/sleeperRef'
+import {
   defaultSlotCounts,
   type ConnectedUser,
   type DraftPick,
@@ -24,6 +33,7 @@ import {
   type DraftStatus,
   type DraftType,
   type KeeperEntry,
+  type LeagueFormat,
   type LeagueSummary,
   type PlayoffWeeks,
   type Player,
@@ -73,7 +83,12 @@ function mapLeagueStatusScoring(league: SleeperLeague): ScoringType {
  * window is read honestly and clamped to the 18-week season; callers fall
  * back to `DEFAULT_PLAYOFF_WEEKS` when the league does not report one.
  */
-export function parsePlayoffWeeks(league: Pick<SleeperLeague, 'settings'> | null): PlayoffWeeks | null {
+export function parsePlayoffWeeks(
+  league: Pick<SleeperLeague, 'settings'> | null,
+  format?: LeagueFormat | null,
+): PlayoffWeeks | null {
+  if (format === 'chopped') return null
+  if (league?.settings?.playoff_teams === 0) return null
   const start = league?.settings?.playoff_week_start
   if (typeof start !== 'number' || start < 1 || start > 18) return null
   const rounds = league?.settings?.playoff_rounds
@@ -217,6 +232,7 @@ function toLeagueSummary(
     draftId: draft?.draft_id ?? league.draft_id,
     draftStatus: draft ? mapDraftStatus(draft.status) : null,
     avatar: league.avatar,
+    leagueFormat: detectLeagueFormat(league, draft),
   }
 }
 
@@ -251,11 +267,14 @@ export const sleeperProvider: DraftProvider = {
     if (!draft) {
       throw new Error('Draft not found on Sleeper')
     }
-    const league = draft.league_id ? await getLeague(draft.league_id) : null
-    const users: SleeperLeagueUser[] = draft.league_id
-      ? ((await getLeagueUsers(draft.league_id)) ?? [])
-      : []
-    const userById = new Map(users.map((u) => [u.user_id, u]))
+    const parentLeagueId = sleeperParentLeagueId(draft)
+    const isPractice = isSleeperMock(draft)
+    const [league, users, tradedPicks] = await Promise.all([
+      parentLeagueId ? getLeague(parentLeagueId) : Promise.resolve(null),
+      parentLeagueId ? getLeagueUsers(parentLeagueId) : Promise.resolve([] as SleeperLeagueUser[] | null),
+      getDraftTradedPicks(draft.draft_id).catch(() => [] as Awaited<ReturnType<typeof getDraftTradedPicks>>),
+    ])
+    const userById = new Map((users ?? []).map((u) => [u.user_id, u]))
 
     const teams = draft.settings?.teams ?? league?.total_rosters ?? 12
     const orderMap = draft.draft_order ?? {}
@@ -265,45 +284,72 @@ export const sleeperProvider: DraftProvider = {
     for (const [userId, slot] of Object.entries(orderMap)) {
       slotToUser.set(slot, userId)
     }
+    const seatedIds = Object.keys(orderMap)
+    const resolvedUserId = seatedIds.includes(yourUserId)
+      ? yourUserId
+      : isPractice && seatedIds.length === 1
+        ? seatedIds[0]
+        : yourUserId
 
     const order = Array.from({ length: teams }, (_, i) => {
       const slot = i + 1
       const userId = slotToUser.get(slot) ?? null
       const user = userId ? userById.get(userId) : undefined
+      const vacant = !userId
+      const cpuLabel = `CPU ${slot}`
       return {
         slot,
         rosterId: String(slotToRoster[String(slot)] ?? slot),
         userId,
-        displayName: user?.display_name ?? (userId ? `Team ${slot}` : `Slot ${slot}`),
-        teamName: user?.metadata?.team_name ?? user?.display_name ?? `Team ${slot}`,
+        displayName: user?.display_name ?? (vacant && isPractice ? cpuLabel : userId ? `Team ${slot}` : `Slot ${slot}`),
+        teamName: user?.metadata?.team_name ?? user?.display_name ?? (vacant && isPractice ? cpuLabel : `Team ${slot}`),
         avatar: sleeperAvatarUrl(user?.metadata?.avatar) ?? sleeperAvatarUrl(user?.avatar),
-        isYou: userId === yourUserId,
+        isYou: userId === resolvedUserId,
       }
     })
 
     const yourSlot = order.find((s) => s.isYou)?.slot ?? null
+    const type = mapDraftType(draft.type)
+    const rounds = draft.settings?.rounds ?? 15
+    const leagueFormat = detectLeagueFormat(league, draft)
+    const pickOwners = buildSleeperPickOwners({
+      teams,
+      rounds,
+      type,
+      reversalRound: draft.settings?.reversal_round,
+      slotToRosterId: slotToRoster,
+      tradedPicks,
+      season: draft.season,
+    })
 
     const session: DraftSession = {
       provider: 'sleeper',
       draftId: draft.draft_id,
-      leagueId: draft.league_id ?? '',
-      name: draft.metadata?.name || league?.name || 'Sleeper draft',
-      type: mapDraftType(draft.type),
+      leagueId: parentLeagueId ?? draft.draft_id,
+      name: isPractice
+        ? `${draft.metadata?.name || league?.name || 'Sleeper mock'} (Mock)`
+        : draft.metadata?.name || league?.name || 'Sleeper draft',
+      type,
       status: mapDraftStatus(draft.status),
       season: draft.season,
       scoringType: mapScoring(draft.metadata?.scoring_type, league ?? undefined),
       teams,
-      rounds: draft.settings?.rounds ?? 15,
+      rounds,
       pickTimer: draft.settings?.pick_timer ?? null,
+      clockEndsAt: sleeperClockEndsAt(draft),
+      clockPaused: mapDraftStatus(draft.status) === 'paused',
       slots: resolveSlots(draft, league),
       rosterPositions: league?.roster_positions ?? [],
       order,
-      yourUserId,
+      yourUserId: resolvedUserId,
       yourSlot,
       startTime: draft.start_time,
       keeperCount: league?.settings?.max_keepers ?? null,
       scoringSettings: league?.scoring_settings ?? null,
-      playoffWeeks: parsePlayoffWeeks(league),
+      playoffWeeks: parsePlayoffWeeks(league, leagueFormat),
+      leagueFormat,
+      pickOwners,
+      isPractice,
     }
     return session
   },
@@ -330,4 +376,39 @@ export const sleeperProvider: DraftProvider = {
   },
 
   getPlayers: loadPlayers,
+}
+
+/**
+ * Opens a Sleeper draft or league mock from a pasted URL / id. League mocks
+ * do not appear in `getLeagues` because Sleeper leaves `league_id` null.
+ */
+export async function resolveSleeperDraftLink(raw: string, preferredUserId?: string) {
+  const ref = parseSleeperRef(raw)
+  if (!ref) {
+    throw new Error('Paste a Sleeper draft, mock, or league link.')
+  }
+  let draftId = ref.kind === 'draft' ? ref.id : null
+  if (ref.kind === 'league') {
+    const league = await getLeague(ref.id)
+    if (!league) throw new Error('League not found on Sleeper')
+    draftId = league.draft_id
+    if (!draftId) throw new Error('That league does not have a draft yet.')
+  }
+  const draft = await getDraft(draftId!)
+  if (!draft) throw new Error('Draft not found on Sleeper')
+  const seated = Object.keys(draft.draft_order ?? {})
+  const userId = preferredUserId && seated.includes(preferredUserId)
+    ? preferredUserId
+    : seated.length === 1
+      ? seated[0]
+      : preferredUserId || draft.creators?.[0] || seated[0]
+  if (!userId) {
+    throw new Error('Find your Sleeper username first so we know which seat is yours.')
+  }
+  return {
+    draftId: draft.draft_id,
+    userId,
+    isPractice: isSleeperMock(draft),
+    name: draft.metadata?.name || 'Sleeper draft',
+  }
 }

@@ -9,6 +9,13 @@ export type ScoringType = 'ppr' | 'half_ppr' | 'std' | 'unknown'
 
 export type DraftType = 'snake' | 'linear' | 'auction'
 
+/**
+ * How the season is scored after the draft. Chopped is Sleeper's last-man-
+ * standing redraft: no playoffs, weekly floor matters more than late-season
+ * upside. Detection lives in the Sleeper mapper.
+ */
+export type LeagueFormat = 'redraft' | 'keeper' | 'dynasty' | 'chopped' | 'best_ball'
+
 export type DraftStatus = 'pre_draft' | 'drafting' | 'paused' | 'complete'
 
 export const CURRENT_SEASON = '2026'
@@ -69,6 +76,7 @@ export interface LeagueSummary {
   teams?: LeagueTeamOption[]
   /** ESPN league-specific practice / public mock — not the real draft. */
   isPractice?: boolean
+  leagueFormat?: LeagueFormat
 }
 
 export interface DraftSlot {
@@ -125,9 +133,12 @@ export interface DraftSession {
   /**
    * The league's playoff weeks, when the provider reports them. Sleeper does
    * (`playoff_week_start` + `playoff_rounds`); the other providers leave it
-   * null and callers fall back to `DEFAULT_PLAYOFF_WEEKS`.
+   * null and callers fall back to `DEFAULT_PLAYOFF_WEEKS`. Chopped / last-man-
+   * standing leagues have no playoffs, so this stays null and callers must
+   * not apply the default window.
    */
   playoffWeeks?: PlayoffWeeks | null
+  leagueFormat?: LeagueFormat
   /**
    * Who owns each pick, indexed by pick number minus one, when the provider
    * publishes its board instead of leaving us to infer it.

@@ -28,3 +28,6 @@ verify_jwt = false
 
 [functions.sync-intelligence]
 verify_jwt = false
+
+[functions.grade-draft]
+verify_jwt = false

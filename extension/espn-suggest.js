@@ -52,7 +52,7 @@
     const players = api.applyValuations(api.mapEspnPlayers(snapshot), valuations)
 
     const taken = api.occupiedPickNumbers(picks)
-    const currentPickNo = api.nextOpenPickNumber(taken, session.teams * session.rounds)
+    const currentPickNo = api.livePickNumber(taken, session.teams * session.rounds, api.draftFrontier(picks))
     const yourSlot = session.yourSlot
     const until = yourSlot == null
       ? null

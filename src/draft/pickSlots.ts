@@ -19,6 +19,24 @@ export function occupiedPickNumbers(picks: DraftPick[]): Set<number> {
   return new Set(picks.filter(occupiesDraftSlot).map((pick) => pick.pickNo))
 }
 
+/**
+ * The furthest pick the room has actually reached.
+ *
+ * Keepers are excluded on purpose. They are made before anyone is on the
+ * clock and sit at the picks they cost, so counting them would put the
+ * frontier in the middle of the board before the draft has started -- and a
+ * keeper reserved in a late round would push it to the end. What is left is
+ * the high-water mark of picks somebody was on the clock for.
+ */
+export function draftFrontier(picks: DraftPick[]): number {
+  let frontier = 0
+  for (const pick of picks) {
+    if (pick.isKeeper || !occupiesDraftSlot(pick)) continue
+    if (pick.pickNo > frontier) frontier = pick.pickNo
+  }
+  return frontier
+}
+
 /** The room facts needed to say which team a pick belongs to. */
 type PickRoom = Pick<DraftSession, 'order' | 'teams' | 'type' | 'pickOwners'>
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  livePickNumber,
+  nextOpenPickNumber,
   nextPickNumberForSlot,
   ownerSlotForPick,
   pickNumberFor,
@@ -69,5 +71,40 @@ describe('a published board that is not a plain snake', () => {
     expect(ownerSlotForPick(13, TEAMS, 'snake', [null, 5]).slot).toBe(12)
     expect(ownerSlotForPick(2, TEAMS, 'snake', [null, 5]).slot).toBe(5)
     expect(pickNumberFor(2, 9, TEAMS, 'snake', [])).toBe(16)
+  })
+})
+
+describe('livePickNumber', () => {
+  it('starts the draft at pick 1 with only keepers on the board', () => {
+    // Keepers at 9, 21 and 33 leave 1..8 open, and the draft opens at 1.
+    expect(livePickNumber([9, 21, 33], 180, 0)).toBe(1)
+  })
+
+  it('steps past a pick the snapshot missed instead of stalling on it', () => {
+    // 127, 140 and 143 never reached us, but the room is past 152. The old
+    // "lowest open slot" answer pinned the room to 127 for the rest of the
+    // draft; from the frontier the answer is the next real pick.
+    const taken = new Set<number>()
+    for (let pick = 1; pick <= 152; pick += 1) taken.add(pick)
+    taken.delete(127)
+    taken.delete(140)
+    taken.delete(143)
+    expect(nextOpenPickNumber(taken, 180)).toBe(127)
+    expect(livePickNumber(taken, 180, 152)).toBe(153)
+  })
+
+  it('skips a keeper reserved ahead of the frontier', () => {
+    const taken = new Set([1, 2, 3, 6])
+    expect(livePickNumber(taken, 20, 3)).toBe(4)
+    expect(livePickNumber(new Set([1, 2, 3, 4, 5, 6]), 20, 5)).toBe(7)
+  })
+
+  it('clamps to the last pick once the board is full', () => {
+    const taken = new Set(Array.from({ length: 20 }, (_, i) => i + 1))
+    expect(livePickNumber(taken, 20, 20)).toBe(20)
+  })
+
+  it('ignores a frontier past the end of the board', () => {
+    expect(livePickNumber(new Set([1]), 12, 99)).toBe(12)
   })
 })

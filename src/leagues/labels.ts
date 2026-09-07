@@ -1,4 +1,4 @@
-import type { LeagueSummary, ScoringType } from '../providers/types'
+import type { LeagueFormat, LeagueSummary, ScoringType } from '../providers/types'
 import type { SavedLeague } from './savedLeagues'
 
 export function scoringLabel(scoring: ScoringType | Pick<SavedLeague, 'scoringType'> | Pick<LeagueSummary, 'scoringType'>) {
@@ -7,6 +7,14 @@ export function scoringLabel(scoring: ScoringType | Pick<SavedLeague, 'scoringTy
   if (value === 'half_ppr') return 'Half PPR'
   if (value === 'std') return 'Standard'
   return 'Unknown scoring'
+}
+
+export function leagueFormatLabel(format?: LeagueFormat | null) {
+  if (format === 'chopped') return 'Chopped'
+  if (format === 'best_ball') return 'Best ball'
+  if (format === 'dynasty') return 'Dynasty'
+  if (format === 'keeper') return 'Keeper'
+  return null
 }
 
 export function providerLabel(provider: SavedLeague['provider'] | 'sleeper' | 'espn' | 'yahoo' | 'nfl' | 'demo') {

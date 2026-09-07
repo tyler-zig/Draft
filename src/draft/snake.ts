@@ -63,6 +63,35 @@ export function nextOpenPickNumber(
   return Math.max(total, 1)
 }
 
+/**
+ * The pick the room is actually on.
+ *
+ * `nextOpenPickNumber` answers "the lowest slot nobody owns", which is the
+ * right question before the draft starts: keepers sit at the picks they cost,
+ * so the made picks are not a run from pick 1 and counting them walks past
+ * the picks still on the board.
+ *
+ * Once picks are being made it is the wrong question. ESPN publishes players
+ * on its own pick rows only when the draft ends, so live picks reach us from
+ * the extension's socket observer -- and a dropped frame leaves a hole that
+ * reads as "open" forever, pinning the room to a pick it passed long ago.
+ * Behind the frontier a gap is a pick we missed; ahead of it, it is a
+ * keeper's reserved slot. So start the search at the frontier and let the
+ * keepers ahead of it be skipped as taken.
+ */
+export function livePickNumber(
+  takenPickNos: Iterable<number>,
+  total: number,
+  frontier = 0,
+): number {
+  const taken = takenPickNos instanceof Set ? takenPickNos : new Set(takenPickNos)
+  const start = frontier > 0 ? Math.min(frontier, Math.max(total, 1)) : 1
+  for (let pick = start; pick <= total; pick += 1) {
+    if (!taken.has(pick)) return pick
+  }
+  return Math.max(total, 1)
+}
+
 export function isDraftOver(
   picksMade: number,
   teams: number,

@@ -27,6 +27,7 @@ export function slotsFromRosterPositions(positions: string[]): SlotCounts {
   const counts = emptySlotCounts()
   for (const raw of positions) {
     const key = normalizeSlot(raw)
+    if (!key) continue
     counts[key] += 1
   }
   return counts
@@ -56,7 +57,7 @@ export function slotsFromSettings(settings: {
   }
 }
 
-export function normalizeSlot(raw: string): RosterSlotKey {
+export function normalizeSlot(raw: string): RosterSlotKey | null {
   const p = raw.toUpperCase()
   if (p === 'DST' || p === 'D/ST' || p === 'DEF') return 'DEF'
   if (p === 'PK' || p === 'K') return 'K'
@@ -73,7 +74,10 @@ export function normalizeSlot(raw: string): RosterSlotKey {
   ) {
     return 'FLEX'
   }
-  if (p === 'BN' || p === 'BENCH' || p === 'IR' || p === 'TAXI') return 'BN'
+  // IR / taxi are reserve slots. Nobody drafts into them; counting them as
+  // bench made a chopped league with 2 IR look like it had two extra rounds.
+  if (p === 'IR' || p === 'TAXI' || p === 'TAXI_SQUAD' || p === 'RESERVE') return null
+  if (p === 'BN' || p === 'BENCH') return 'BN'
   if (p === 'QB' || p === 'RB' || p === 'WR' || p === 'TE') return p
   return 'BN'
 }

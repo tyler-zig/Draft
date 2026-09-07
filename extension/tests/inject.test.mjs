@@ -190,7 +190,10 @@ console.log('\nESPN websocket: a drafted team defense is a real pick')
   const picks = h.posted.at(-1)?.league?.draftDetail?.picks ?? []
   check('parses a negative player id off the socket', picks.some((pick) => pick.playerId === -16034))
   check('gives the defense a real pick number', picks.find((pick) => pick.playerId === -16034)?.overallPickNumber === 1)
-  check('does not treat the -1 placeholder as taken', picks.filter((pick) => pick.playerId === -1).length === 1)
+  // The placeholder must not block the live pick from taking slot 1 (checked
+  // above) and must not survive beside it either: one row per board slot, or
+  // the cached snapshot stores a duplicate for every pick of the draft.
+  check('replaces the -1 placeholder instead of doubling the slot', picks.filter((pick) => pick.overallPickNumber === 1).length === 1)
 }
 
 console.log('\npayload size')

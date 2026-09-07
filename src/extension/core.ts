@@ -17,8 +17,8 @@
  * IIFE exposing `globalThis.DraftAssistantCore`.
  */
 export { mapEspnSession, mapEspnPicks, mapEspnPlayers, espnSnapshotPickStamp } from '../espn/mapEspn'
-export { nextOpenPickNumber, nextPickNumberForSlot, ownerSlotForPick, picksUntilSlot } from '../draft/snake'
-export { occupiedPickNumbers } from '../draft/pickSlots'
+export { livePickNumber, nextOpenPickNumber, nextPickNumberForSlot, ownerSlotForPick, picksUntilSlot } from '../draft/snake'
+export { draftFrontier, occupiedPickNumbers } from '../draft/pickSlots'
 export { recommendPicks, suggestionSet } from '../draft/recommend'
 export { suggestionGlance } from '../draft/playerContext'
 export { overlayRoom } from './overlayRoom'

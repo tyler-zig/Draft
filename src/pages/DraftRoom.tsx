@@ -6,10 +6,10 @@ import { DEMO_DRAFT_ID, demoPick, demoProvider, demoTick, initDemoDraft } from '
 import { recommendPicks, suggestionSet } from '../draft/recommend'
 import { fillRoster } from '../draft/rosterNeeds'
 import { byeWeekDistribution, formatByePositions } from '../draft/byeWeeks'
-import { nextOpenPickNumber, nextPickNumberForSlot, ownerSlotForPick, picksUntilSlot } from '../draft/snake'
+import { livePickNumber, nextPickNumberForSlot, ownerSlotForPick, picksUntilSlot } from '../draft/snake'
 import { loadQueue, moveQueueItem, resolveQueuePlayerIds, saveQueue, subscribeQueue } from '../draft/queue'
 import { keeperPicks, keeperStorageKey, loadKeepers, loadKeepersCostRoundPicks, mergeKeepers, occupiedPickNumbers, saveKeepers, saveKeepersCostRoundPicks, withKeeperPicks } from '../draft/keepers'
-import { normalizePickSlots } from '../draft/pickSlots'
+import { draftFrontier, normalizePickSlots } from '../draft/pickSlots'
 import { clearMockLeagueSeed, loadMockLeagueSeed, mockTemplateFrom, saveMockLeagueSeed } from '../draft/mockLeague'
 import { playerDraftContext } from '../draft/playerContext'
 import { clearCurrentDraft, playerIntelligenceHrefForSession, saveCurrentDraft } from '../draft/currentDraft'
@@ -168,9 +168,6 @@ export function DraftRoom() {
     draftId === espnDraftId(espnSnapshot.season || '2026', espnSnapshot.leagueId || ''),
   )
   const espnReady = providerId !== 'espn' || espnSnapshotMatchesRoute
-  const liveClock = providerId === 'espn' && espnSnapshotMatchesRoute ? espnSnapshot?.clock : null
-  const clockNow = useNow(Boolean(liveClock && !liveClock.paused && liveClock.endsAt))
-  const clockSeconds = remainingPickSeconds(liveClock, clockNow)
   const siteReady = !siteId || Boolean(
     siteBridge?.snapshot?.league &&
     draftId === siteDraftId(siteBridge.snapshot.season || '2026', siteBridge.snapshot.leagueId || ''),
@@ -178,8 +175,15 @@ export function DraftRoom() {
   const roomReady = espnReady && siteReady
   const liveSite = providerId === 'espn' || Boolean(siteId)
   const playersQuery = useQuery({ queryKey: ['players', providerId, draftId], queryFn: () => provider!.getPlayers(draftId), enabled: Boolean(provider && roomReady), staleTime: liveSite ? 2000 : 86_400_000 })
-  const draftQuery = useQuery({ queryKey: ['draft', providerId, draftId, userId], queryFn: () => provider!.getDraft(draftId!, userId), enabled: Boolean(provider && draftId && userId && roomReady), refetchInterval: (query) => query.state.data?.status === 'complete' ? false : liveSite ? 2000 : 4000 })
+  const draftQuery = useQuery({ queryKey: ['draft', providerId, draftId, userId], queryFn: () => provider!.getDraft(draftId!, userId), enabled: Boolean(provider && draftId && userId && roomReady), refetchInterval: (query) => query.state.data?.status === 'complete' ? false : liveSite || providerId === 'sleeper' ? 2000 : 4000 })
   const session = draftQuery.data
+  const espnLiveClock = providerId === 'espn' && espnSnapshotMatchesRoute ? espnSnapshot?.clock : null
+  const sleeperLiveClock = session?.clockEndsAt != null
+    ? { remaining: 0, endsAt: session.clockEndsAt, paused: Boolean(session.clockPaused) }
+    : null
+  const liveClock = espnLiveClock ?? sleeperLiveClock
+  const clockNow = useNow(Boolean(liveClock && !liveClock.paused && liveClock.endsAt))
+  const clockSeconds = remainingPickSeconds(liveClock, clockNow)
   const picksQuery = useQuery({ queryKey: ['picks', providerId, draftId], queryFn: () => provider!.getPicks(draftId!), enabled: Boolean(provider && draftId && session), refetchInterval: session?.status !== 'complete' ? 2000 : false })
   const keepersQuery = useQuery({ queryKey: ['keepers', providerId, draftId], queryFn: () => provider!.getKeepers!(draftId!), enabled: Boolean(provider?.getKeepers && draftId && roomReady), refetchInterval: session?.status === 'pre_draft' ? 15_000 : false })
 
@@ -250,7 +254,9 @@ export function DraftRoom() {
   // Same artifact, different slice: the full matchup model for room-wide playoff SoS.
   const scheduleModelQuery = useQuery({ queryKey: ['published-schedule-model'], queryFn: ({ signal }) => getPublishedScheduleModel(signal), staleTime: 86_400_000 })
   const liveAdpSnapshotQuery = useQuery(liveAdpQuery)
-  const playoffWeeks = session?.playoffWeeks ?? DEFAULT_PLAYOFF_WEEKS
+  const playoffWeeks = session?.leagueFormat === 'chopped'
+    ? null
+    : (session?.playoffWeeks ?? DEFAULT_PLAYOFF_WEEKS)
   const intelligencePlayers = useMemo(() => {
     const enriched = applyScheduleByes(enrichPlayersWithDirectory(players, sleeperPlayers), scheduleQuery.data)
     return attachPlayoffSos(enriched, scheduleModelQuery.data, session?.scoringType, playoffWeeks)
@@ -275,7 +281,11 @@ export function DraftRoom() {
   const takenPickNos = useMemo(() => occupiedPickNumbers(picks), [picks])
   // Not picks.length + 1: keeper picks sit in later rounds, so the made picks
   // are not a contiguous run from pick 1.
-  const nextPickNo = useMemo(() => session ? nextOpenPickNumber(takenPickNos, session.teams * session.rounds) : 1, [session, takenPickNos])
+  // Measured from the frontier, not from the first empty slot: a pick the
+  // socket observer missed leaves a hole that would otherwise hold the room
+  // at a pick it passed rounds ago.
+  const frontier = useMemo(() => draftFrontier(picks), [picks])
+  const nextPickNo = useMemo(() => session ? livePickNumber(takenPickNos, session.teams * session.rounds, frontier) : 1, [session, takenPickNos, frontier])
   const takenIds = useMemo(() => new Set(picks.map((pick) => pick.playerId)), [picks])
   const resolvedQueue = useMemo(() => resolveQueuePlayerIds(queuedIds, valuedPlayers), [queuedIds, valuedPlayers])
   const activeQueue = useMemo(() => resolvedQueue.filter((id) => !takenIds.has(id)), [resolvedQueue, takenIds])
@@ -495,7 +505,7 @@ export function DraftRoom() {
   }
   const exitPracticeDraft = () => {
     clearCurrentDraft()
-    requestExitEspnPractice()
+    if (providerId === 'espn') requestExitEspnPractice()
     navigate('/', { replace: true })
   }
   /**
@@ -597,8 +607,8 @@ export function DraftRoom() {
 
   return <div className={`draft-command-center cc-${theme}`}>
     <header className="cc-topbar">
-      <div className="cc-topbar-left"><div className="cc-menu-wrap"><button type="button" className="cc-icon" aria-label="Menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>☰</button>{menuOpen ? <nav className="cc-nav-menu" aria-label="Draft Room navigation"><Link to="/" onClick={() => setMenuOpen(false)}>Leagues</Link><Link to={playerIntelligenceHrefForSession(session)} onClick={() => setMenuOpen(false)}>Players</Link><button type="button" onClick={() => { setRankingsOpen(true); setMenuOpen(false) }}>Rankings</button>{providerId === 'espn' ? <button type="button" onClick={exitPracticeDraft}>{isPracticeRoom ? 'Exit practice draft' : 'Exit ESPN draft'}</button> : null}{isPracticeRoom ? null : <button type="button" onClick={() => { setKeepersOpen(true); setMenuOpen(false) }}>Keepers</button>}</nav> : null}</div><Link to="/" className="cc-brand">Draft Assistant</Link><div className="cc-team-switch"><label className="cc-picker cc-team-picker"><TeamLogo src={viewedTeam?.avatar} label={viewedTeam?.teamName || viewedTeam?.displayName || 'Team'} /><Select aria-label="View team roster" value={rosterSlot} onChange={(event) => setViewedSlot(Number(event.target.value))}>{session.order.map((slot) => <option key={slot.slot} value={slot.slot}>{slot.teamName || slot.displayName}{slot.isYou ? ' (you)' : ''}</option>)}</Select></label><button type="button" className="cc-team-you" disabled={session.yourSlot == null || rosterSlot === session.yourSlot} onClick={() => setViewedSlot(session.yourSlot)} aria-label="View your team" title="View your team">You</button></div></div>
-      <div className="cc-league">{session.name} <span>·</span> Round {currentLocation.round}, Pick {currentPickNo}<small className={`cc-provider-badge ${canMutateDraft ? 'cc-provider-demo' : ''}`}>{provider.label} · {isPracticeRoom ? 'Practice' : canMutateDraft ? 'Demo controls' : 'Read-only'} · <span className={session.scoringType === 'unknown' ? 'cc-scoring-unknown' : undefined} title={session.scoringType === 'unknown' ? 'The league payload carried no scoring settings, so ADP and projections fall back to a cross-market blend.' : 'Detected from the league scoring settings'}>{scoringLabel(session.scoringType)}</span></small>{isPracticeRoom ? <button type="button" className="cc-rankings-button" onClick={exitPracticeDraft}>Exit practice</button> : null}</div>
+      <div className="cc-topbar-left"><div className="cc-menu-wrap"><button type="button" className="cc-icon" aria-label="Menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>☰</button>{menuOpen ? <nav className="cc-nav-menu" aria-label="Draft Room navigation"><Link to="/" onClick={() => setMenuOpen(false)}>Leagues</Link><Link to={playerIntelligenceHrefForSession(session)} onClick={() => setMenuOpen(false)}>Players</Link><button type="button" onClick={() => { setRankingsOpen(true); setMenuOpen(false) }}>Rankings</button>{providerId === 'espn' ? <button type="button" onClick={exitPracticeDraft}>{isPracticeRoom ? 'Exit practice draft' : 'Exit ESPN draft'}</button> : isPracticeRoom ? <button type="button" onClick={exitPracticeDraft}>Exit mock draft</button> : null}{isPracticeRoom ? null : <button type="button" onClick={() => { setKeepersOpen(true); setMenuOpen(false) }}>Keepers</button>}</nav> : null}</div><Link to="/" className="cc-brand">Draft Assistant</Link><div className="cc-team-switch"><label className="cc-picker cc-team-picker"><TeamLogo src={viewedTeam?.avatar} label={viewedTeam?.teamName || viewedTeam?.displayName || 'Team'} /><Select aria-label="View team roster" value={rosterSlot} onChange={(event) => setViewedSlot(Number(event.target.value))}>{session.order.map((slot) => <option key={slot.slot} value={slot.slot}>{slot.teamName || slot.displayName}{slot.isYou ? ' (you)' : ''}</option>)}</Select></label><button type="button" className="cc-team-you" disabled={session.yourSlot == null || rosterSlot === session.yourSlot} onClick={() => setViewedSlot(session.yourSlot)} aria-label="View your team" title="View your team">You</button></div></div>
+      <div className="cc-league">{session.name} <span>·</span> Round {currentLocation.round}, Pick {currentPickNo}<small className={`cc-provider-badge ${canMutateDraft ? 'cc-provider-demo' : ''}`}>{provider.label} · {isPracticeRoom ? 'Practice' : canMutateDraft ? 'Demo controls' : 'Read-only'}{session.leagueFormat === 'chopped' ? ' · Chopped' : ''} · <span className={session.scoringType === 'unknown' ? 'cc-scoring-unknown' : undefined} title={session.scoringType === 'unknown' ? 'The league payload carried no scoring settings, so ADP and projections fall back to a cross-market blend.' : session.leagueFormat === 'chopped' ? 'Chopped is last-man-standing: no playoffs. Draft for a weekly floor.' : 'Detected from the league scoring settings'}>{scoringLabel(session.scoringType)}</span></small>{isPracticeRoom ? <button type="button" className="cc-rankings-button" onClick={exitPracticeDraft}>Exit practice</button> : null}</div>
       <div className="cc-topbar-right"><AccountButton compact /><Link className="cc-rankings-button" to={playerIntelligenceHrefForSession(session)}>Players</Link><button type="button" className="cc-rankings-button" onClick={() => setRankingsOpen(true)}>Rankings</button><button type="button" className="cc-rankings-button" onClick={() => setGradesOpen(true)}>Grades</button><div className={`cc-clock${youAreOnClock && clockSeconds != null && clockSeconds <= 10 ? ' cc-clock-low' : ''}`}>{youAreOnClock ? 'ON THE CLOCK' : 'YOUR PICK IN'} <b>{youAreOnClock ? (clockSeconds != null ? formatPickClock(clockSeconds) : session.pickTimer != null ? formatPickClock(session.pickTimer) : '—') : until ?? '—'}</b></div><button type="button" className="cc-icon" aria-label={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} title={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} onClick={() => updateDraftSounds(!draftSounds)}>{draftSounds ? '🔊' : '🔇'}</button><button type="button" className="cc-icon" aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => updateTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☼' : '☾'}</button><button type="button" className="cc-icon" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
     </header>
 
@@ -626,7 +636,7 @@ export function DraftRoom() {
     {fullBoardOpen ? <Modal title="Full draft board" wide onClose={() => setFullBoardOpen(false)}><DraftBoard session={session} picks={picks} players={valuedPlayers} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} /></Modal> : null}
     {rankingsOpen ? <RankingsSheet leagueName={session.name} leagueScoring={session.scoringType} receptionPremium={session.receptionPremium} directory={players} builtinSets={builtinSets} importedSets={importedSets} rankSettings={rankSettings} onClose={() => setRankingsOpen(false)} onChange={() => { setRankSettings(loadRankSettings()); setRankTick((tick) => tick + 1) }} /> : null}
     {keepersOpen ? <Modal title="Keepers" onClose={() => setKeepersOpen(false)}><KeeperPanel session={session} players={valuedPlayers} keepers={merged.keepers} manualKeepers={manualKeepers} conflicts={merged.conflicts} candidates={keeperCandidates} providerLabel={provider.label} syncing={keepersQuery.isFetching} costRoundPicks={keepersCostRoundPicks} onChange={setStoredKeepers} /></Modal> : null}
-    {gradesOpen ? <Modal title="Draft grades" wide onClose={() => setGradesOpen(false)}><DraftGrades session={session} picks={picks} players={valuedPlayers} highlightedSlot={session.yourSlot} note={providerId === 'demo' && session.status === 'complete' ? 'Mock draft complete — here is how the room graded out.' : undefined} /></Modal> : null}
+    {gradesOpen ? <Modal title="Draft grades" report onClose={() => setGradesOpen(false)}><DraftGrades session={session} picks={picks} players={valuedPlayers} highlightedSlot={session.yourSlot} note={providerId === 'demo' && session.status === 'complete' ? 'Mock draft complete' : undefined} /></Modal> : null}
     {settingsOpen ? <SettingsSheet leagueName={session.name} providerLabel={provider.label} scoringType={session.scoringType} theme={theme} draftSounds={draftSounds} visibleColumns={visibleColumns} rankSettings={rankSettings} builtinSets={builtinSets} importedSets={importedSets} keeperCount={merged.keepers.length} teamCount={session.teams} allowedKeepers={session.keeperCount} keepersCostRoundPicks={keepersCostRoundPicks} mock={mockDraft} onClose={() => setSettingsOpen(false)} onThemeChange={updateTheme} onDraftSoundsChange={updateDraftSounds} onColumnsChange={updateColumns} onKeepersCostChange={setKeepersCostRoundPicks} onOpenRankings={() => { setSettingsOpen(false); setRankingsOpen(true) }} onOpenKeepers={() => { setSettingsOpen(false); setKeepersOpen(true) }} onMockChange={updateMockDraft} onStartMock={startMockDraft} onMockLeague={providerId === 'demo' ? undefined : startLeagueMock} onClearMockLeague={mockLeagueSeed ? clearLeagueMock : undefined} mockLeagueName={mockLeagueSeed?.template.name ?? null} /> : null}
   </div>
 }
@@ -639,6 +649,6 @@ function boardPlayerName(player?: Player, pick?: DraftPick) {
   return `${first} ${last}`.trim()
 }
 
-function Modal({ title, wide = false, onClose, children }: { title: string; wide?: boolean; onClose: () => void; children: React.ReactNode }) {
-  return <div className="cc-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`cc-modal ${wide ? 'cc-modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button></header><div className="cc-modal-body">{children}</div></section></div>
+function Modal({ title, wide = false, report = false, onClose, children }: { title: string; wide?: boolean; report?: boolean; onClose: () => void; children: React.ReactNode }) {
+  return <div className="cc-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`cc-modal ${wide ? 'cc-modal-wide' : ''} ${report ? 'cc-modal-report' : ''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button></header><div className="cc-modal-body">{children}</div></section></div>
 }

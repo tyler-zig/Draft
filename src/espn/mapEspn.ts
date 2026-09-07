@@ -219,6 +219,15 @@ const POSITION_BY_ID: Record<number, string> = {
   16: 'DEF',
 }
 
+/**
+ * Lineup slots that are filled by drafting.
+ *
+ * Slot 21 is IR, and it is deliberately absent. Nobody drafts into injured
+ * reserve, but the roster length doubles as the round count, so counting it
+ * gave a 15-round draft a 16th round: the board offered twelve picks that do
+ * not exist and the room never reached "complete". It is not a bench spot
+ * either -- mapping it to BN was what hid the extra slot in plain sight.
+ */
 const SLOT_ID_TO_POS: Record<string, string> = {
   '0': 'QB',
   '2': 'RB',
@@ -228,7 +237,6 @@ const SLOT_ID_TO_POS: Record<string, string> = {
   '16': 'DEF',
   '17': 'K',
   '20': 'BN',
-  '21': 'BN',
   '23': 'FLEX',
 }
 
@@ -739,6 +747,29 @@ export function espnSnapshotPickCount(snapshot: EspnSnapshot | null | undefined)
  * Everything other than the pick list is taken from the incoming snapshot --
  * settings, teams, the clock and roster data should always be the newest read.
  */
+/**
+ * One row per board slot, preferring the row that names a player.
+ *
+ * A snapshot that carries both ESPN's empty row and a real pick for the same
+ * slot is not merely redundant: this board is written back to storage on
+ * every poll, so a duplicate introduced once is stored forever and the row
+ * count drifts away from the size of the draft.
+ */
+function dedupeBoard(picks: EspnRawPick[], teamCount: number): EspnRawPick[] {
+  const bySlot = new Map<number, EspnRawPick>()
+  const loose: EspnRawPick[] = []
+  for (const pick of picks) {
+    const overall = boardOverall(pick, teamCount)
+    if (!(overall > 0)) {
+      loose.push(pick)
+      continue
+    }
+    const held = bySlot.get(overall)
+    if (!held || (!pickHasPlayer(held) && pickHasPlayer(pick))) bySlot.set(overall, pick)
+  }
+  return [...bySlot.values(), ...loose]
+}
+
 export function mergeEspnSnapshots(cached: EspnSnapshot | null | undefined, incoming: EspnSnapshot): EspnSnapshot {
   if (!cached?.league || !incoming.league) return incoming
   if (!sameDraft(cached, incoming)) return incoming
@@ -765,7 +796,7 @@ export function mergeEspnSnapshots(cached: EspnSnapshot | null | undefined, inco
     ...incoming,
     league: {
       ...league,
-      draftDetail: { ...league.draftDetail, picks: [...kept, ...missing] },
+      draftDetail: { ...league.draftDetail, picks: dedupeBoard([...kept, ...missing], teamCount) },
     },
   }
 }

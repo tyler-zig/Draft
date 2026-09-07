@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { CURRENT_SEASON, type LeagueSummary } from '../providers/types'
-import { sleeperProvider } from '../providers/sleeperProvider'
+import { resolveSleeperDraftLink, sleeperProvider } from '../providers/sleeperProvider'
 import {
   DEMO_DRAFT_ID,
   DEMO_USER_ID,
@@ -17,7 +17,7 @@ import type { SiteProviderId } from '../sites/types'
 import { AccountButton } from '../components/AccountButton'
 import { Select } from '../components/Select'
 import { SavedLeaguesPanel } from '../components/SavedLeaguesPanel'
-import { draftStatusLabel, playersHrefForSavedLeague, providerLabel, scoringLabel, openedLabel } from '../leagues/labels'
+import { draftStatusLabel, leagueFormatLabel, playersHrefForSavedLeague, providerLabel, scoringLabel, openedLabel } from '../leagues/labels'
 import { useSavedLeagues } from '../leagues/useSavedLeagues'
 import { savedLeagueFrom, savedLeagueHref, savedLeagueKey, type SavedLeague } from '../leagues/savedLeagues'
 import { useAuth } from '../supabase/AuthProvider'
@@ -59,6 +59,8 @@ export function ConnectPage() {
     () => localStorage.getItem(LAST_ESPN_LEAGUE_KEY) ?? '',
   )
   const [connectTab, setConnectTab] = useState<'sleeper' | 'espn' | 'yahoo' | 'nfl'>('sleeper')
+  const [draftLink, setDraftLink] = useState('')
+  const [linkLoading, setLinkLoading] = useState(false)
   const [query, setQuery] = useState('')
   const { installed: espnInstalled, snapshot: espnSnapshot } = useEspnBridge()
   const yahooBridge = useSiteBridge('yahoo')
@@ -155,6 +157,22 @@ export function ConnectPage() {
     if (!saved || !auth.user) return
     setPane({ type: 'league', key: savedLeagueKey(saved) })
     setError(null)
+  }
+
+  async function openSleeperLink(event: FormEvent) {
+    event.preventDefault()
+    setError(null)
+    setLinkLoading(true)
+    try {
+      const room = await resolveSleeperDraftLink(draftLink, userId ?? undefined)
+      navigate(
+        `/draft/sleeper/${encodeURIComponent(room.draftId)}?userId=${encodeURIComponent(room.userId)}`,
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open that Sleeper link')
+    } finally {
+      setLinkLoading(false)
+    }
   }
 
   function enterSleeperDraft(league: LeagueSummary) {
@@ -371,6 +389,10 @@ export function ConnectPage() {
               sortedLeagues={sortedLeagues}
               enterSleeperDraft={enterSleeperDraft}
               saveSleeperLeague={saveSleeperLeague}
+              draftLink={draftLink}
+              setDraftLink={setDraftLink}
+              linkLoading={linkLoading}
+              openSleeperLink={openSleeperLink}
               espnInstalled={espnInstalled}
               espnLeague={espnLeague}
               espnSnapshotError={espnSnapshot?.error ?? null}
@@ -482,7 +504,8 @@ function LeaguePane({ league, onOpen, onForget }: {
 
 function AddPane({
   connectTab, setConnectTab, username, setUsername, season, setSeason, loading, loadLeagues,
-  displayName, sortedLeagues, enterSleeperDraft, saveSleeperLeague, espnInstalled, espnLeague,
+  displayName, sortedLeagues, enterSleeperDraft, saveSleeperLeague, draftLink, setDraftLink,
+  linkLoading, openSleeperLink, espnInstalled, espnLeague,
   espnSnapshotError, espnPageUrl, espnAvailable,   espnLeagueId, setEspnLeagueId, openEspn, enterEspnDraft,
   yahooInstalled, yahooLeague, yahooError, yahooPageUrl, yahooAvailable, yahooLeagueId, setYahooLeagueId,
   nflInstalled, nflLeague, nflError, nflPageUrl, nflAvailable, nflLeagueId, setNflLeagueId,
@@ -500,6 +523,10 @@ function AddPane({
   sortedLeagues: LeagueSummary[]
   enterSleeperDraft: (league: LeagueSummary) => void
   saveSleeperLeague: (league: LeagueSummary) => void
+  draftLink: string
+  setDraftLink: (value: string) => void
+  linkLoading: boolean
+  openSleeperLink: (event: FormEvent) => void
   espnInstalled: boolean
   espnLeague: LeagueSummary | null
   espnSnapshotError: string | null
@@ -574,6 +601,23 @@ function AddPane({
             </div>
           </form>
           <p className="lg-help">Sleeper is read-only. You still make picks on the league site.</p>
+          <form className="lg-form" onSubmit={openSleeperLink}>
+            <label className="lg-field">
+              <span>Draft or mock link</span>
+              <input
+                value={draftLink}
+                onChange={(event) => setDraftLink(event.target.value)}
+                placeholder="sleeper.com/beta/draft/nfl/…"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </label>
+            <button type="submit" className="lg-primary" disabled={linkLoading || !draftLink.trim()} style={{ minWidth: 0, width: '100%', height: 38, fontSize: 13 }}>
+              {linkLoading ? 'Opening…' : 'Open link'}
+            </button>
+          </form>
+          <p className="lg-help">League mocks are not listed above. Paste the Sleeper mock URL to sit next to that board.</p>
           {sortedLeagues.length ? (
             <div className="lg-found">
               <h3>Found for {displayName ?? 'that username'}</h3>
@@ -581,7 +625,7 @@ function AddPane({
                 <div className="lg-found-row" key={league.id}>
                   <div>
                     <b>{league.name}</b>
-                    <small>{league.teamCount} teams · {scoringLabel(league)} · {draftStatusLabel(league)}</small>
+                    <small>{league.teamCount} teams · {scoringLabel(league)}{leagueFormatLabel(league.leagueFormat) ? ` · ${leagueFormatLabel(league.leagueFormat)}` : ''} · {draftStatusLabel(league)}</small>
                   </div>
                   {league.draftId
                     ? <button type="button" className="lg-mini" onClick={() => enterSleeperDraft(league)}>Enter</button>

@@ -555,6 +555,16 @@ describe('mergeEspnSnapshots', () => {
     expect(picks.filter((p) => p.overallPickNumber === 2)).toHaveLength(1)
   })
 
+  it('collapses a board that already carries duplicate rows', () => {
+    // What a cache that merged the extension's live picks alongside ESPN's
+    // own empty rows looks like: two rows per slot, stored again every poll.
+    const cached = snap([pick(1, 101), pick(1, EMPTY), pick(2, 102), pick(2, EMPTY)])
+    const incoming = snap([pick(1, EMPTY), pick(2, EMPTY)])
+    const picks = mergeEspnSnapshots(cached, incoming).league!.draftDetail!.picks!
+    expect(picks).toHaveLength(2)
+    expect(picks.map((p) => p.playerId).sort()).toEqual([101, 102])
+  })
+
   it('takes new picks from the incoming snapshot', () => {
     const cached = snap([pick(1, 101), pick(2, 102)])
     const incoming = snap([pick(1, 101), pick(2, 102), pick(3, 103)])
@@ -593,5 +603,31 @@ describe('mergeEspnSnapshots', () => {
   it('passes the incoming snapshot through when there is nothing cached', () => {
     const incoming = snap([pick(1, 101)])
     expect(mergeEspnSnapshots(null, incoming)).toBe(incoming)
+  })
+})
+
+describe('draft length', () => {
+  it('does not count injured reserve as a round', () => {
+    // A real 12-team roster: QB, 2 RB, 2 WR, TE, FLEX, K, DEF, 6 BN and an
+    // IR slot. Nobody drafts into IR, but the roster length is the round
+    // count -- counting it gave the board a 16th round of picks that do not
+    // exist and the room never reached "complete".
+    const session = mapEspnSession(
+      snapshot({
+        settings: {
+          name: 'League', size: 12,
+          draftSettings: { type: 'SNAKE' },
+          rosterSettings: {
+            lineupSlotCounts: {
+              '0': 1, '2': 2, '4': 2, '6': 1, '16': 1, '17': 1, '20': 6, '21': 1, '23': 1,
+            },
+          },
+        },
+      }),
+      '1',
+    )
+    expect(session.rounds).toBe(15)
+    expect(session.rounds * session.teams).toBe(180)
+    expect(session.slots.BN).toBe(6)
   })
 })

@@ -1,9 +1,14 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { requestAiDraftGrade } from '../api/draftGrade'
 import { defaultSlotCounts } from '../providers/types'
 import type { DraftPick, DraftSession, DraftSlot, Player } from '../providers/types'
 import { DraftGrades } from './DraftGrades'
+
+vi.mock('../api/draftGrade', () => ({
+  requestAiDraftGrade: vi.fn(),
+}))
 
 function slot(slot: number, name: string): DraftSlot {
   return { slot, rosterId: `r${slot}`, userId: null, displayName: name, teamName: name, isYou: slot === 1 }
@@ -61,17 +66,66 @@ describe('DraftGrades', () => {
     expect(teamRows()[0]).toHaveTextContent('Team 4')
   })
 
-  it('expands a team to show its starting lineup', async () => {
+  it('opens a team in the roster pane', async () => {
     const user = userEvent.setup()
     render(<DraftGrades session={session()} picks={picks} players={players} />)
     await user.click(screen.getByRole('button', { name: 'Team 2 details' }))
-    expect(screen.getByRole('button', { name: 'Team 2 details' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Team 2 details' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('heading', { name: /Team 2/ })).toBeInTheDocument()
     expect(screen.getAllByText('p2').length).toBeGreaterThan(0)
+  })
+
+  it('switches between roster analysis and full room rankings', async () => {
+    const user = userEvent.setup()
+    render(<DraftGrades session={session()} picks={picks} players={players} highlightedSlot={1} />)
+
+    await user.click(screen.getByRole('button', { name: 'Roster analysis' }))
+    expect(screen.getByRole('heading', { name: /Team 1 · Pick by pick/ })).toBeInTheDocument()
+    expect(screen.getByText('Market value at draft time')).toBeInTheDocument()
+    expect(screen.getByText('Roster construction')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Room rankings' }))
+    expect(screen.getByRole('heading', { name: 'Full room rankings' })).toBeInTheDocument()
+    expect(screen.getByText('Projected lineup')).toBeInTheDocument()
+    expect(screen.getByText('Coverage')).toBeInTheDocument()
   })
 
   it('shows the note and an empty state with no picks', () => {
     render(<DraftGrades session={session()} picks={[]} players={players} note="Mock draft complete" />)
     expect(screen.getByText('Mock draft complete')).toBeInTheDocument()
     expect(screen.getByText('No picks made yet.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'AI summary' })).not.toBeInTheDocument()
+  })
+
+  it('writes a DeepSeek room and team summary', async () => {
+    vi.mocked(requestAiDraftGrade).mockResolvedValue({
+      headline: 'Value won the room',
+      summary: 'Three teams waited on running back.',
+      themes: ['RB run'],
+      superlatives: [],
+      teams: [
+        { slot: 1, headline: 'Your zero-RB board', summary: 'You waited and still landed p1.', steals: ['p1 at 5'], reaches: [], risks: ['Thin RB'], outlook: null, next: null },
+        { slot: 2, headline: 'Reached early', summary: 'Paid up for p2.', steals: [], reaches: ['p2'], risks: [], outlook: null, next: null },
+      ],
+    })
+    const user = userEvent.setup()
+    render(<DraftGrades session={session()} picks={picks} players={players} highlightedSlot={1} />)
+    await user.click(screen.getByRole('button', { name: 'AI summary' }))
+    expect(await screen.findByRole('region', { name: 'AI draft summary' })).toHaveTextContent('Value won the room')
+    expect(screen.getByText('RB run')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'AI team summary' })).toHaveTextContent('Your zero-RB board')
+    expect(screen.getByText('p1 at 5')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Team 2 details' }))
+    expect(screen.getByRole('region', { name: 'AI team summary' })).toHaveTextContent('Reached early')
+    expect(screen.getByRole('button', { name: 'Rewrite' })).toBeInTheDocument()
+  })
+
+  it('shows a DeepSeek error without wiping the sheet', async () => {
+    vi.mocked(requestAiDraftGrade).mockRejectedValue(new Error('DeepSeek is not configured on this project.'))
+    const user = userEvent.setup()
+    render(<DraftGrades session={session()} picks={picks} players={players} />)
+    await user.click(screen.getByRole('button', { name: 'AI summary' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('DeepSeek is not configured on this project.')
+    expect(teamRows()).toHaveLength(4)
   })
 })

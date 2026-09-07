@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePickSlots, occupiedPickNumbers, occupiesDraftSlot, pickTeamSlot } from './pickSlots'
+import { draftFrontier, normalizePickSlots, occupiedPickNumbers, occupiesDraftSlot, pickTeamSlot } from './pickSlots'
 import type { DraftPick, DraftSession } from '../providers/types'
 
 const TEAMS = 4
@@ -74,5 +74,33 @@ describe('existing slot arithmetic still holds', () => {
     expect(occupiesDraftSlot(pick({ pickNo: 0 }))).toBe(false)
     expect(occupiesDraftSlot(pick({ pickNo: 3 }))).toBe(true)
     expect([...occupiedPickNumbers([pick({ pickNo: 0 }), pick({ pickNo: 3 })])]).toEqual([3])
+  })
+})
+
+describe('draftFrontier', () => {
+  it('is zero when only keepers are on the board', () => {
+    // Keepers sit at the picks they cost, so counting them would put the
+    // frontier mid-board before anyone has been on the clock.
+    expect(draftFrontier([
+      pick({ pickNo: 9, isKeeper: true }),
+      pick({ pickNo: 21, isKeeper: true }),
+      pick({ pickNo: 33, isKeeper: true }),
+    ])).toBe(0)
+  })
+
+  it('takes the high-water mark of picks somebody was on the clock for', () => {
+    expect(draftFrontier([
+      pick({ pickNo: 9, isKeeper: true }),
+      pick({ pickNo: 40 }),
+      pick({ pickNo: 12 }),
+    ])).toBe(40)
+  })
+
+  it('ignores keepers that cost no board slot', () => {
+    expect(draftFrontier([pick({ pickNo: 0, isKeeper: true }), pick({ pickNo: 5 })])).toBe(5)
+  })
+
+  it('is not dragged forward by a keeper reserved in a late round', () => {
+    expect(draftFrontier([pick({ pickNo: 5 }), pick({ pickNo: 170, isKeeper: true })])).toBe(5)
   })
 })

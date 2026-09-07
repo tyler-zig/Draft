@@ -70,6 +70,8 @@ vi.mock('../leagues/useSavedLeagues', async () => {
   }
 })
 
+const resolveSleeperDraftLink = vi.fn()
+
 vi.mock('../providers/sleeperProvider', () => ({
   sleeperProvider: {
     getLeagues: vi.fn(async () => ({
@@ -81,6 +83,7 @@ vi.mock('../providers/sleeperProvider', () => ({
     })),
     getPlayers: vi.fn(async () => []),
   },
+  resolveSleeperDraftLink: (...args: unknown[]) => resolveSleeperDraftLink(...args),
 }))
 
 function saved(overrides: Partial<SavedLeague> = {}): SavedLeague {
@@ -100,6 +103,7 @@ describe('ConnectPage', () => {
     localStorage.clear()
     requestOpenEspn.mockReset()
     requestOpenSite.mockReset()
+    resolveSleeperDraftLink.mockReset()
   })
 
   it('opens the selected saved league from the launch pad', () => {
@@ -157,6 +161,7 @@ describe('ConnectPage', () => {
     expect(await screen.findByText('Redraft Royale')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Enter' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Draft or mock link')).toBeInTheDocument()
   })
 
   it('pins a found Sleeper league without entering the room', async () => {

@@ -22,7 +22,9 @@ var DraftAssistantCore = (() => {
   __export(core_exports, {
     applyValuations: () => applyValuations,
     buildValuations: () => buildValuations,
+    draftFrontier: () => draftFrontier,
     espnSnapshotPickStamp: () => espnSnapshotPickStamp,
+    livePickNumber: () => livePickNumber,
     mapEspnPicks: () => mapEspnPicks,
     mapEspnPlayers: () => mapEspnPlayers,
     mapEspnSession: () => mapEspnSession,
@@ -168,6 +170,14 @@ var DraftAssistantCore = (() => {
     }
     return Math.max(total, 1);
   }
+  function livePickNumber(takenPickNos, total, frontier = 0) {
+    const taken = takenPickNos instanceof Set ? takenPickNos : new Set(takenPickNos);
+    const start = frontier > 0 ? Math.min(frontier, Math.max(total, 1)) : 1;
+    for (let pick = start; pick <= total; pick += 1) {
+      if (!taken.has(pick)) return pick;
+    }
+    return Math.max(total, 1);
+  }
   function picksUntilSlot(currentPickNo, yourSlot, teams, rounds, type, takenPickNos, owners) {
     if (type === "auction") return null;
     const total = teams * rounds;
@@ -257,7 +267,6 @@ var DraftAssistantCore = (() => {
     "16": "DEF",
     "17": "K",
     "20": "BN",
-    "21": "BN",
     "23": "FLEX"
   };
   function espnDraftId(season, leagueId) {
@@ -590,6 +599,14 @@ var DraftAssistantCore = (() => {
   }
   function occupiedPickNumbers(picks) {
     return new Set(picks.filter(occupiesDraftSlot).map((pick) => pick.pickNo));
+  }
+  function draftFrontier(picks) {
+    let frontier = 0;
+    for (const pick of picks) {
+      if (pick.isKeeper || !occupiesDraftSlot(pick)) continue;
+      if (pick.pickNo > frontier) frontier = pick.pickNo;
+    }
+    return frontier;
   }
 
   // src/rankings/aliases.ts
