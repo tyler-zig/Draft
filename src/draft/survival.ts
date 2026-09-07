@@ -32,6 +32,30 @@ export function spreadFor(player: {
 }
 
 /**
+ * Coarse prior when no expert range is published. ~12% of ADP, clamped so
+ * early picks are not treated as locks and late ones are not a coin flip.
+ */
+export function defaultSpread(mean: number): number {
+  if (!(mean > 0)) return 8
+  return Math.max(6, Math.min(18, mean * 0.12))
+}
+
+/** Expert spread when we have one; otherwise the ADP prior. */
+export function draftSpread(
+  player: {
+    rankStdDev?: number | null
+    rankLow?: number | null
+    rankHigh?: number | null
+  },
+  mean?: number | null,
+): number | null {
+  const expert = spreadFor(player)
+  if (expert != null) return expert
+  if (mean != null && mean > 0) return defaultSpread(mean)
+  return null
+}
+
+/**
  * Standard normal sample via Box-Muller, for simulating how far a CPU picker
  * strays from the board. `rng` is injected so tests can pin the outcome; each
  * call consumes two uniforms, and values at 0 or 1 are clamped so Math.log
@@ -66,5 +90,25 @@ export function survivalAdjustment(survival: number): { delta: number; reason: s
   return {
     delta,
     reason: urgency > 0.5 ? `${Math.round(urgency * 100)}% gone by next pick` : null,
+  }
+}
+
+/**
+ * Score for a pick you have not reached yet: expected value you can
+ * actually capture. A higher-VORP player who will be gone is not the
+ * best available at your seat.
+ */
+export function waitSurvivalAdjustment(
+  survival: number,
+  baseValue: number,
+): { delta: number; reason: string | null } {
+  const gone = 1 - survival
+  return {
+    delta: -gone * Math.max(0, baseValue) * 0.9,
+    reason: gone > 0.5
+      ? `${Math.round(gone * 100)}% gone by your pick`
+      : survival >= 0.7
+        ? 'Likely there at your pick'
+        : null,
   }
 }

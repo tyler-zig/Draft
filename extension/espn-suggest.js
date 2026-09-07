@@ -60,6 +60,10 @@
     const yourNextPickNo = yourSlot == null
       ? null
       : api.nextPickNumberForSlot(currentPickNo, yourSlot, session.teams, session.rounds, session.type, taken, session.pickOwners)
+    const yourFollowingPickNo = yourSlot == null || yourNextPickNo == null
+      ? null
+      : api.nextPickNumberForSlot(yourNextPickNo + 1, yourSlot, session.teams, session.rounds, session.type, taken, session.pickOwners)
+    const waitingForPick = yourNextPickNo != null && yourNextPickNo > currentPickNo
 
     const recs = api.suggestionSet(api.recommendPicks({
       players,
@@ -68,8 +72,11 @@
       slots: session.slots,
       currentPickNo,
       yourNextPickNo,
+      yourFollowingPickNo,
+      leagueFormat: session.leagueFormat,
+      teams: session.teams,
       limit: 24,
-    }), 5)
+    }), 5, { waitForPick: waitingForPick })
 
     const room = api.overlayRoom?.({
       players,

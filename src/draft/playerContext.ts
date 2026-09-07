@@ -1,6 +1,6 @@
 import type { DraftPick, Player, SlotCounts } from '../providers/types'
 import { fillRoster, needForPosition, type PositionNeed } from './rosterNeeds'
-import { spreadFor, survivalProbability } from './survival'
+import { draftSpread, survivalProbability } from './survival'
 
 const UNRANKED = 9999
 
@@ -143,15 +143,19 @@ export function playerDraftContext(options: {
 
   const baseline = marketBaseline(player)
   const valueVsPick = baseline ? Math.round(currentPickNo - baseline.value) : null
-  const lastsUntilYourPick =
-    baseline == null || yourNextPickNo == null || yourNextPickNo <= currentPickNo
-      ? null
-      : baseline.value > yourNextPickNo
-  const spread = spreadFor(player)
+  const spread = draftSpread(player, baseline?.value)
   const survival =
     baseline == null || spread == null || yourNextPickNo == null || yourNextPickNo <= currentPickNo
       ? null
       : survivalProbability(baseline.value, spread, yourNextPickNo)
+  const lastsUntilYourPick =
+    yourNextPickNo == null || yourNextPickNo <= currentPickNo
+      ? null
+      : survival != null
+        ? survival >= 0.5
+        : baseline != null
+          ? baseline.value > yourNextPickNo
+          : null
 
   const takenPick = picks.find((pick) => pick.playerId === player.id)
   const takenBy: TakenBy | null = takenPick

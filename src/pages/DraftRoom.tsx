@@ -42,6 +42,7 @@ import { sleeperProvider } from '../providers/sleeperProvider'
 import { DEFAULT_PLAYOFF_WEEKS } from '../providers/types'
 import type { DraftPick, DraftSession, KeeperEntry, Player, ScoringType } from '../providers/types'
 import type { RankSet } from '../rankings/types'
+import { CHOPPED_EARLY_WEEKS } from '../draft/chopped'
 import { attachPlayoffSos, attachProjectedPoints, applyScheduleByes, enrichPlayersWithDirectory } from '../intelligence/players'
 import { attachProjectedAdp, getNflProjections, projectionPointsPool, projectionSeason } from '../api/playerProjections'
 import { getPublishedSchedule, getPublishedScheduleModel } from '../api/playerHistorical'
@@ -89,6 +90,11 @@ export function DraftRoom() {
   const [draftSounds, setDraftSounds] = useState(loadDraftSounds)
   const [visibleColumns, setVisibleColumns] = useState<TableColumnKey[]>(loadTableColumns)
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null)
+  // A real pick is irreversible, and PlayerTable drafts on double-click. So a
+  // provider write is staged here and only leaves on an explicit confirm.
+  const [pendingPick, setPendingPick] = useState<{ playerId: string; pickNo: number } | null>(null)
+  const [submittingPick, setSubmittingPick] = useState(false)
+  const [pickError, setPickError] = useState<string | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
   const [fullBoardOpen, setFullBoardOpen] = useState(false)
   const [boardRound, setBoardRound] = useState<number | null>(null)
@@ -175,7 +181,9 @@ export function DraftRoom() {
   const roomReady = espnReady && siteReady
   const liveSite = providerId === 'espn' || Boolean(siteId)
   const playersQuery = useQuery({ queryKey: ['players', providerId, draftId], queryFn: () => provider!.getPlayers(draftId), enabled: Boolean(provider && roomReady), staleTime: liveSite ? 2000 : 86_400_000 })
-  const draftQuery = useQuery({ queryKey: ['draft', providerId, draftId, userId], queryFn: () => provider!.getDraft(draftId!, userId), enabled: Boolean(provider && draftId && userId && roomReady), refetchInterval: (query) => query.state.data?.status === 'complete' ? false : liveSite || providerId === 'sleeper' ? 2000 : 4000 })
+  // Same reason as the picks query below: this one carries `status` and the
+  // pick clock, so a hidden tab must not stop reading it either.
+  const draftQuery = useQuery({ queryKey: ['draft', providerId, draftId, userId], queryFn: () => provider!.getDraft(draftId!, userId), enabled: Boolean(provider && draftId && userId && roomReady), refetchInterval: (query) => query.state.data?.status === 'complete' ? false : liveSite || providerId === 'sleeper' ? 2000 : 4000, refetchIntervalInBackground: true, refetchOnWindowFocus: true })
   const session = draftQuery.data
   const espnLiveClock = providerId === 'espn' && espnSnapshotMatchesRoute ? espnSnapshot?.clock : null
   const sleeperLiveClock = session?.clockEndsAt != null
@@ -184,7 +192,16 @@ export function DraftRoom() {
   const liveClock = espnLiveClock ?? sleeperLiveClock
   const clockNow = useNow(Boolean(liveClock && !liveClock.paused && liveClock.endsAt))
   const clockSeconds = remainingPickSeconds(liveClock, clockNow)
-  const picksQuery = useQuery({ queryKey: ['picks', providerId, draftId], queryFn: () => provider!.getPicks(draftId!), enabled: Boolean(provider && draftId && session), refetchInterval: session?.status !== 'complete' ? 2000 : false })
+  // `refetchIntervalInBackground` is the difference between a board that keeps
+  // up and one that is frozen. React Query only fires a `refetchInterval` while
+  // `document.visibilityState !== 'hidden'` unless this is set, and a draft
+  // assistant is read from a *second tab* -- you make the pick on Sleeper, so
+  // the assistant is hidden exactly when the picks it needs are landing. With
+  // the app's global `refetchOnWindowFocus: false` there is not even a
+  // catch-up read on the way back; the board just sits at whatever it last saw.
+  // `refetchOnWindowFocus` is re-enabled here so returning to the tab repaints
+  // immediately rather than waiting out the interval.
+  const picksQuery = useQuery({ queryKey: ['picks', providerId, draftId], queryFn: () => provider!.getPicks(draftId!), enabled: Boolean(provider && draftId && roomReady), refetchInterval: session?.status !== 'complete' ? 1000 : false, refetchIntervalInBackground: true, refetchOnWindowFocus: true })
   const keepersQuery = useQuery({ queryKey: ['keepers', providerId, draftId], queryFn: () => provider!.getKeepers!(draftId!), enabled: Boolean(provider?.getKeepers && draftId && roomReady), refetchInterval: session?.status === 'pre_draft' ? 15_000 : false })
 
   useEffect(() => {
@@ -257,10 +274,13 @@ export function DraftRoom() {
   const playoffWeeks = session?.leagueFormat === 'chopped'
     ? null
     : (session?.playoffWeeks ?? DEFAULT_PLAYOFF_WEEKS)
+  const sosWeeks = session?.leagueFormat === 'chopped'
+    ? CHOPPED_EARLY_WEEKS
+    : playoffWeeks
   const intelligencePlayers = useMemo(() => {
     const enriched = applyScheduleByes(enrichPlayersWithDirectory(players, sleeperPlayers), scheduleQuery.data)
-    return attachPlayoffSos(enriched, scheduleModelQuery.data, session?.scoringType, playoffWeeks)
-  }, [players, sleeperPlayers, scheduleQuery.data, scheduleModelQuery.data, session?.scoringType, playoffWeeks])
+    return attachPlayoffSos(enriched, scheduleModelQuery.data, session?.scoringType, sosWeeks)
+  }, [players, sleeperPlayers, scheduleQuery.data, scheduleModelQuery.data, session?.scoringType, sosWeeks])
   const rankedPlayers = useMemo(() => applyConsensusRanks(intelligencePlayers, [...builtinSets, ...importedSets], rankSettings.enabledIds, rankSettings.method, session?.scoringType), [intelligencePlayers, builtinSets, importedSets, rankSettings, session?.scoringType])
   // RotoWire season projections via Sleeper, scored to the league's format, so
   // VORP can rank the pool by forecasted value. Players with no published row
@@ -352,7 +372,14 @@ export function DraftRoom() {
     () => session?.yourSlot == null ? null : nextPickNumberForSlot(nextPickNo, session.yourSlot, session.teams, session.rounds, session.type, takenPickNos, session.pickOwners),
     [session, nextPickNo, takenPickNos],
   )
-  const recs = useMemo(() => session ? suggestionSet(recommendPicks({ players: valuedPlayers, picks, yourSlot: session.yourSlot, slots: session.slots, currentPickNo: nextPickNo, queuedIds: activeQueue, yourNextPickNo, limit: 24 })) : [], [session, valuedPlayers, picks, nextPickNo, activeQueue, yourNextPickNo])
+  const yourFollowingPickNo = useMemo(
+    () => session?.yourSlot == null || yourNextPickNo == null
+      ? null
+      : nextPickNumberForSlot(yourNextPickNo + 1, session.yourSlot, session.teams, session.rounds, session.type, takenPickNos, session.pickOwners),
+    [session, yourNextPickNo, takenPickNos],
+  )
+  const waitingForPick = yourNextPickNo != null && yourNextPickNo > nextPickNo
+  const recs = useMemo(() => session ? suggestionSet(recommendPicks({ players: valuedPlayers, picks, yourSlot: session.yourSlot, slots: session.slots, currentPickNo: nextPickNo, queuedIds: activeQueue, yourNextPickNo, yourFollowingPickNo, leagueFormat: session.leagueFormat, teams: session.teams, limit: 24 }), 5, { waitForPick: waitingForPick }) : [], [session, valuedPlayers, picks, nextPickNo, activeQueue, yourNextPickNo, yourFollowingPickNo, waitingForPick])
   const roster = useMemo(() => {
     if (!session) return []
     const slot = viewedSlot ?? session.yourSlot
@@ -467,8 +494,16 @@ export function DraftRoom() {
     />
   }
   if (draftQuery.isError) return <AppScreen title="Could not load draft" body={draftQuery.error instanceof Error ? draftQuery.error.message : 'Failed to load draft'} action={<Link to="/">Back to leagues</Link>} />
-  if (!session || playersQuery.isLoading) return <AppScreen busy title="Loading draft room" body="Pulling players and picks." />
+  if (!session) return <AppScreen busy title="Loading draft room" body="Pulling the draft board." />
   if (session.type === 'auction') return <AppScreen title="Auction drafts are not in v1" body="Connect a snake draft instead." />
+
+  const sleeperPickNote = providerId !== 'sleeper'
+    ? null
+    : picksQuery.isError
+      ? `Could not load Sleeper picks. ${picksQuery.error instanceof Error ? picksQuery.error.message : 'Retrying…'}`
+      : !session.isPractice && session.status === 'pre_draft' && madePicks.length === 0
+        ? 'This official draft has not started. Find leagues lists live mocks, or paste the Sleeper mock URL on the connect page.'
+        : null
 
   const currentPickNo = Math.min(nextPickNo, session.teams * session.rounds)
   const isPracticeRoom = Boolean(
@@ -487,7 +522,54 @@ export function DraftRoom() {
   const boardStart = (viewedRound - 1) * session.teams + 1
   const boardPicks = Array.from({ length: session.teams }, (_, index) => boardStart + index)
   const canMutateDraft = provider.capabilities.draftPick
-  const canDraft = canMutateDraft && youAreOnClock
+  // The demo engine mutates a local board; a site write leaves the app. They
+  // share a capability flag but must not share an affordance -- the demo can
+  // be clicked any time, a real pick only on the clock.
+  const writesToSite = providerId !== 'demo' && typeof provider.makePick === 'function'
+  const canDraft = writesToSite ? youAreOnClock : canMutateDraft && youAreOnClock
+  const pendingPlayer = pendingPick ? playersById.get(pendingPick.playerId) ?? null : null
+
+  /**
+   * Stages a site pick. Every guard is re-checked on confirm as well: the
+   * board moves underneath this dialog, and the number shown here is the one
+   * that gets submitted.
+   */
+  const requestSitePick = (playerId: string) => {
+    setPickError(null)
+    setPendingPick({ playerId, pickNo: currentPickNo })
+  }
+
+  const confirmSitePick = async () => {
+    if (!pendingPick || submittingPick || !provider.makePick) return
+    // Re-read the live board rather than trusting what was on screen when the
+    // dialog opened. A pick that landed in between makes this one wrong.
+    if (!youAreOnClock || pendingPick.pickNo !== currentPickNo) {
+      setPickError('The board moved while this was open. Close and pick again.')
+      return
+    }
+    if (takenIds.has(pendingPick.playerId)) {
+      setPickError('That player is already gone.')
+      return
+    }
+    setSubmittingPick(true)
+    setPickError(null)
+    try {
+      const result = await provider.makePick({
+        draftId: session.draftId,
+        playerId: pendingPick.playerId,
+        pickNo: pendingPick.pickNo,
+      })
+      if (!result.ok) {
+        setPickError(result.error || 'Sleeper did not accept the pick.')
+        return
+      }
+      setPendingPick(null)
+      setSelectedPlayerId(null)
+      void refetchPicks()
+    } finally {
+      setSubmittingPick(false)
+    }
+  }
   const updateTheme = (next: AppTheme) => { setTheme(next); saveTheme(next) }
   const updateDraftSounds = (next: boolean) => { setDraftSounds(next); saveDraftSounds(next) }
   const updateColumns = (next: TableColumnKey[]) => { setVisibleColumns(next); saveTableColumns(next) }
@@ -608,7 +690,7 @@ export function DraftRoom() {
   return <div className={`draft-command-center cc-${theme}`}>
     <header className="cc-topbar">
       <div className="cc-topbar-left"><div className="cc-menu-wrap"><button type="button" className="cc-icon" aria-label="Menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>☰</button>{menuOpen ? <nav className="cc-nav-menu" aria-label="Draft Room navigation"><Link to="/" onClick={() => setMenuOpen(false)}>Leagues</Link><Link to={playerIntelligenceHrefForSession(session)} onClick={() => setMenuOpen(false)}>Players</Link><button type="button" onClick={() => { setRankingsOpen(true); setMenuOpen(false) }}>Rankings</button>{providerId === 'espn' ? <button type="button" onClick={exitPracticeDraft}>{isPracticeRoom ? 'Exit practice draft' : 'Exit ESPN draft'}</button> : isPracticeRoom ? <button type="button" onClick={exitPracticeDraft}>Exit mock draft</button> : null}{isPracticeRoom ? null : <button type="button" onClick={() => { setKeepersOpen(true); setMenuOpen(false) }}>Keepers</button>}</nav> : null}</div><Link to="/" className="cc-brand">Draft Assistant</Link><div className="cc-team-switch"><label className="cc-picker cc-team-picker"><TeamLogo src={viewedTeam?.avatar} label={viewedTeam?.teamName || viewedTeam?.displayName || 'Team'} /><Select aria-label="View team roster" value={rosterSlot} onChange={(event) => setViewedSlot(Number(event.target.value))}>{session.order.map((slot) => <option key={slot.slot} value={slot.slot}>{slot.teamName || slot.displayName}{slot.isYou ? ' (you)' : ''}</option>)}</Select></label><button type="button" className="cc-team-you" disabled={session.yourSlot == null || rosterSlot === session.yourSlot} onClick={() => setViewedSlot(session.yourSlot)} aria-label="View your team" title="View your team">You</button></div></div>
-      <div className="cc-league">{session.name} <span>·</span> Round {currentLocation.round}, Pick {currentPickNo}<small className={`cc-provider-badge ${canMutateDraft ? 'cc-provider-demo' : ''}`}>{provider.label} · {isPracticeRoom ? 'Practice' : canMutateDraft ? 'Demo controls' : 'Read-only'}{session.leagueFormat === 'chopped' ? ' · Chopped' : ''} · <span className={session.scoringType === 'unknown' ? 'cc-scoring-unknown' : undefined} title={session.scoringType === 'unknown' ? 'The league payload carried no scoring settings, so ADP and projections fall back to a cross-market blend.' : session.leagueFormat === 'chopped' ? 'Chopped is last-man-standing: no playoffs. Draft for a weekly floor.' : 'Detected from the league scoring settings'}>{scoringLabel(session.scoringType)}</span></small>{isPracticeRoom ? <button type="button" className="cc-rankings-button" onClick={exitPracticeDraft}>Exit practice</button> : null}</div>
+      <div className="cc-league">{session.name} <span>·</span> Round {currentLocation.round}, Pick {currentPickNo}<small className={`cc-provider-badge ${canMutateDraft ? 'cc-provider-demo' : ''}`}>{provider.label} · {isPracticeRoom ? 'Practice' : writesToSite ? 'Live picks' : canMutateDraft ? 'Demo controls' : 'Read-only'}{session.leagueFormat === 'chopped' ? ' · Chopped' : ''} · <span className={session.scoringType === 'unknown' ? 'cc-scoring-unknown' : undefined} title={session.scoringType === 'unknown' ? 'The league payload carried no scoring settings, so ADP and projections fall back to a cross-market blend.' : session.leagueFormat === 'chopped' ? 'Chopped is last-man-standing: no playoffs. Draft for a weekly floor.' : 'Detected from the league scoring settings'}>{scoringLabel(session.scoringType)}</span></small>{isPracticeRoom ? <button type="button" className="cc-rankings-button" onClick={exitPracticeDraft}>Exit practice</button> : null}</div>
       <div className="cc-topbar-right"><AccountButton compact /><Link className="cc-rankings-button" to={playerIntelligenceHrefForSession(session)}>Players</Link><button type="button" className="cc-rankings-button" onClick={() => setRankingsOpen(true)}>Rankings</button><button type="button" className="cc-rankings-button" onClick={() => setGradesOpen(true)}>Grades</button><div className={`cc-clock${youAreOnClock && clockSeconds != null && clockSeconds <= 10 ? ' cc-clock-low' : ''}`}>{youAreOnClock ? 'ON THE CLOCK' : 'YOUR PICK IN'} <b>{youAreOnClock ? (clockSeconds != null ? formatPickClock(clockSeconds) : session.pickTimer != null ? formatPickClock(session.pickTimer) : '—') : until ?? '—'}</b></div><button type="button" className="cc-icon" aria-label={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} title={draftSounds ? 'Mute draft sounds' : 'Unmute draft sounds'} onClick={() => updateDraftSounds(!draftSounds)}>{draftSounds ? '🔊' : '🔇'}</button><button type="button" className="cc-icon" aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => updateTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☼' : '☾'}</button><button type="button" className="cc-icon" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button></div>
     </header>
 
@@ -621,18 +703,33 @@ export function DraftRoom() {
         <section className="cc-section" aria-label="Roster summary"><div className="cc-section-mode" role="tablist" aria-label="Summary view"><button type="button" role="tab" aria-selected={summaryView === 'positions'} className={summaryView === 'positions' ? 'active' : ''} onClick={() => setSummaryView('positions')}>Positions</button><button type="button" role="tab" aria-selected={summaryView === 'byes'} className={summaryView === 'byes' ? 'active' : ''} onClick={() => setSummaryView('byes')}>Byes</button></div>{summaryView === 'positions' ? <div className="cc-position-summary">{summaryRows.map((row) => <div key={row.key}>{isBoardPositionFilter(row.key) ? <button type="button" className={positionFilter === row.key ? 'cc-pos-filter active' : 'cc-pos-filter'} aria-pressed={positionFilter === row.key} aria-label={positionFilter === row.key ? `Clear ${row.label} filter` : `Filter board to ${row.label}`} onClick={() => filterByPosition(row.key)}>{row.label}</button> : <span>{row.label}</span>}<div><i style={{ width: `${row.total ? row.filled / row.total * 100 : 0}%` }} /></div><b>{row.filled}/{row.total}</b><small>{row.open ? `${row.open} open` : 'Filled'}</small></div>)}</div> : byeRows.length ? <div className="cc-position-summary cc-bye-summary">{byeRows.map((row) => <div key={row.week} className={row.stacked ? 'cc-bye-stack' : undefined}><span>WK {row.week}</span><div><i style={{ width: `${byeTotal ? row.count / byeTotal * 100 : 0}%` }} /></div><b>{row.count}</b><small>{formatByePositions(row.byPosition)}</small></div>)}</div> : <p className="cc-summary-empty">No rostered players have a bye week yet.</p>}</section>
       </aside>
 
-      <PlayerTable players={valuedPlayers} picks={picks} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={provider.label} currentPickNo={currentPickNo} queuedIds={activeQueue} selectedId={selectedPlayerId} selectedContext={selectedContext} scoringType={session.scoringType} playoffWeeks={playoffWeeks} visibleColumnKeys={visibleColumns} onVisibleColumnKeysChange={updateColumns} onSelect={setSelectedPlayerId} onDraft={canMutateDraft ? (id) => { demoPick(id, players, keptIds); setSelectedPlayerId(null); void refetchPicks() } : undefined} onToggleQueue={toggleQueue} positionFilter={positionFilter} onPositionFilterChange={setPositionFilter} />
+      <PlayerTable players={valuedPlayers} picks={picks} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={provider.label} currentPickNo={currentPickNo} queuedIds={activeQueue} selectedId={selectedPlayerId} selectedContext={selectedContext} scoringType={session.scoringType} playoffWeeks={playoffWeeks} visibleColumnKeys={visibleColumns} onVisibleColumnKeysChange={updateColumns} onSelect={setSelectedPlayerId} onDraft={writesToSite ? (canDraft ? requestSitePick : undefined) : canMutateDraft ? (id) => { demoPick(id, players, keptIds); setSelectedPlayerId(null); void refetchPicks() } : undefined} onToggleQueue={toggleQueue} positionFilter={positionFilter} onPositionFilterChange={setPositionFilter} />
 
       <aside className="cc-right">
-        <BestAvailable recs={recs} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} />
+        <BestAvailable recs={recs} currentPickNo={currentPickNo} targetPickNo={yourNextPickNo} onSelect={setSelectedPlayerId} />
         <section className="cc-card"><div className="cc-card-head"><div className="cc-card-title">Draft queue</div></div>{queuedPlayers.length ? queuedPlayers.map((player, index) => <button type="button" className="cc-queue-row" key={player.id} onClick={() => setSelectedPlayerId(player.id)}><span className="cc-n">{index + 1}</span><PlayerPhoto player={player} /><span className="cc-nm">{player.fullName}</span><span className={`cc-p ${positionClass(player.position)}`}>{player.position}</span><span className="cc-t">Tier {player.tier ?? Math.max(1, Math.ceil(player.searchRank / 15))}</span></button>) : <div className="cc-empty-card">Star players to build your queue.</div>}</section>
         <button type="button" className="cc-wide" onClick={() => setQueueOpen(true)}>☷　Manage Queue</button>
       </aside>
     </div>
 
-    <footer className="cc-footer"><div className="cc-footer-head"><div className="cc-eyebrow">Draft board</div><div className="cc-round-tabs" role="tablist" aria-label="Draft round">{Array.from({ length: session.rounds }, (_, index) => index + 1).map((round) => <button type="button" role="tab" key={round} className={`${viewedRound === round ? 'on' : ''} ${round === currentLocation.round ? 'live' : ''}`} aria-selected={viewedRound === round} aria-label={round === currentLocation.round ? `Round ${round}, current` : `Round ${round}`} onClick={() => setBoardRound(round === currentLocation.round ? null : round)}>{round}</button>)}</div><button type="button" className="cc-board-all" onClick={() => setFullBoardOpen(true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>View full board</button></div><div className="cc-picks" style={{ gridTemplateColumns: `repeat(${session.teams}, minmax(0, 1fr))` }}>{boardPicks.map((pickNo) => { const made = picks.find((pick) => pick.pickNo === pickNo); const loc = ownerSlotForPick(pickNo, session.teams, session.type, session.pickOwners); const owner = session.order.find((slot) => slot.slot === loc.slot); const player = made ? valuedPlayers.find((item) => item.id === made.playerId) : undefined; const isCurrent = pickNo === currentPickNo; const ownerName = owner?.teamName || owner?.displayName || `Slot ${loc.slot}`; const playerName = boardPlayerName(player, made); const position = player?.position || made?.meta?.position || ''; const nflTeam = player?.team ?? made?.meta?.team ?? null; return <div key={pickNo} className={`cc-pick ${isCurrent ? 'cc-you' : ''} ${made?.isKeeper ? 'cc-keeper-pick' : ''} ${!made && !isCurrent ? 'cc-future' : ''}`} title={playerName ? `${player?.fullName || playerName} · ${ownerName}` : ownerName}><span className="cc-no">{pickNo}{made?.isKeeper ? <i className="cc-keeper-tag">K</i> : null}</span>{player ? <PlayerPhoto player={player} className="cc-avatar-xl" /> : <TeamLogo className="cc-team-logo-xl" src={owner?.avatar} label={ownerName} />}{playerName ? <span className="cc-pn">{playerName}</span> : null}<span className="cc-tm">{playerName ? [position, nflTeam].filter(Boolean).join(' · ') || ownerName : ownerName}</span>{isCurrent ? <span className="cc-mine">{owner?.isYou ? 'YOUR PICK' : 'ON THE CLOCK'}</span> : null}</div> })}</div><div className="cc-next">Viewing round {viewedRound} · {until === 0 ? 'You are on the clock' : `${until ?? '—'} picks until your next pick`}</div></footer>
+    <footer className="cc-footer">{sleeperPickNote ? <div className="cc-room-note" role="status">{sleeperPickNote}</div> : null}<div className="cc-footer-head"><div className="cc-eyebrow">Draft board</div><div className="cc-round-tabs" role="tablist" aria-label="Draft round">{Array.from({ length: session.rounds }, (_, index) => index + 1).map((round) => <button type="button" role="tab" key={round} className={`${viewedRound === round ? 'on' : ''} ${round === currentLocation.round ? 'live' : ''}`} aria-selected={viewedRound === round} aria-label={round === currentLocation.round ? `Round ${round}, current` : `Round ${round}`} onClick={() => setBoardRound(round === currentLocation.round ? null : round)}>{round}</button>)}</div><button type="button" className="cc-board-all" onClick={() => setFullBoardOpen(true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>View full board</button></div><div className="cc-picks" style={{ gridTemplateColumns: `repeat(${session.teams}, minmax(0, 1fr))` }}>{boardPicks.map((pickNo) => { const made = picks.find((pick) => pick.pickNo === pickNo); const loc = ownerSlotForPick(pickNo, session.teams, session.type, session.pickOwners); const owner = session.order.find((slot) => slot.slot === loc.slot); const player = made ? valuedPlayers.find((item) => item.id === made.playerId) : undefined; const isCurrent = pickNo === currentPickNo; const ownerName = owner?.teamName || owner?.displayName || `Slot ${loc.slot}`; const playerName = boardPlayerName(player, made); const position = player?.position || made?.meta?.position || ''; const nflTeam = player?.team ?? made?.meta?.team ?? null; return <div key={pickNo} className={`cc-pick ${isCurrent ? 'cc-you' : ''} ${made?.isKeeper ? 'cc-keeper-pick' : ''} ${!made && !isCurrent ? 'cc-future' : ''}`} title={playerName ? `${player?.fullName || playerName} · ${ownerName}` : ownerName}><span className="cc-no">{pickNo}{made?.isKeeper ? <i className="cc-keeper-tag">K</i> : null}</span>{player ? <PlayerPhoto player={player} className="cc-avatar-xl" /> : <TeamLogo className="cc-team-logo-xl" src={owner?.avatar} label={ownerName} />}{playerName ? <span className="cc-pn">{playerName}</span> : null}<span className="cc-tm">{playerName ? [position, nflTeam].filter(Boolean).join(' · ') || ownerName : ownerName}</span>{isCurrent ? <span className="cc-mine">{owner?.isYou ? 'YOUR PICK' : 'ON THE CLOCK'}</span> : null}</div> })}</div><div className="cc-next">Viewing round {viewedRound} · {until === 0 ? 'You are on the clock' : `${until ?? '—'} picks until your next pick`}</div></footer>
 
     {queueOpen ? <Modal title="Manage draft queue" onClose={() => setQueueOpen(false)}><p className="cc-modal-note">Your order is saved for this draft. Queue actions do not submit picks to {provider.label}.</p>{activeQueue.length ? <ol className="cc-manage-queue">{activeQueue.map((id, index) => { const player = valuedPlayers.find((item) => item.id === id); if (!player) return null; return <li key={id}><span className="cc-n">{index + 1}</span><PlayerPhoto player={player} /><button type="button" className="cc-queue-select" onClick={() => { setSelectedPlayerId(id); setQueueOpen(false) }}>{player.fullName}<small>{player.position} · {player.team ?? 'FA'}</small></button><button type="button" disabled={index === 0} onClick={() => moveQueue(id, -1)} aria-label={`Move ${player.fullName} up`}>↑</button><button type="button" disabled={index === activeQueue.length - 1} onClick={() => moveQueue(id, 1)} aria-label={`Move ${player.fullName} down`}>↓</button><button type="button" className="cc-remove" onClick={() => toggleQueue(id)} aria-label={`Remove ${player.fullName}`}>×</button></li> })}</ol> : <div className="cc-empty-card">Your queue is empty.</div>}</Modal> : null}
+    {pendingPick && pendingPlayer ? <Modal title="Send this pick to Sleeper?" onClose={() => { if (!submittingPick) { setPendingPick(null); setPickError(null) } }}>
+      <p className="cc-modal-note">This submits the pick to your real Sleeper draft. It cannot be undone from here.</p>
+      <div className="cc-confirm-pick">
+        <PlayerPhoto player={pendingPlayer} className="cc-avatar-xl" />
+        <div>
+          <h3>{pendingPlayer.fullName}</h3>
+          <span>{pendingPlayer.position}{pendingPlayer.team ? ` · ${pendingPlayer.team}` : ''} · Round {currentLocation.round}, pick {pendingPick.pickNo}</span>
+        </div>
+      </div>
+      {pickError ? <div className="cc-room-note" role="alert">{pickError}</div> : null}
+      <div className="cc-confirm-actions">
+        <button type="button" onClick={() => { setPendingPick(null); setPickError(null) }} disabled={submittingPick}>Cancel</button>
+        <button type="button" className="cc-wide" onClick={() => { void confirmSitePick() }} disabled={submittingPick}>{submittingPick ? 'Sending…' : `Draft ${pendingPlayer.fullName}`}</button>
+      </div>
+    </Modal> : null}
     {fullBoardOpen ? <Modal title="Full draft board" wide onClose={() => setFullBoardOpen(false)}><DraftBoard session={session} picks={picks} players={valuedPlayers} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} /></Modal> : null}
     {rankingsOpen ? <RankingsSheet leagueName={session.name} leagueScoring={session.scoringType} receptionPremium={session.receptionPremium} directory={players} builtinSets={builtinSets} importedSets={importedSets} rankSettings={rankSettings} onClose={() => setRankingsOpen(false)} onChange={() => { setRankSettings(loadRankSettings()); setRankTick((tick) => tick + 1) }} /> : null}
     {keepersOpen ? <Modal title="Keepers" onClose={() => setKeepersOpen(false)}><KeeperPanel session={session} players={valuedPlayers} keepers={merged.keepers} manualKeepers={manualKeepers} conflicts={merged.conflicts} candidates={keeperCandidates} providerLabel={provider.label} syncing={keepersQuery.isFetching} costRoundPicks={keepersCostRoundPicks} onChange={setStoredKeepers} /></Modal> : null}

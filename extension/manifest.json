@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Draft Assistant Sync",
-  "version": "1.7.0",
-  "description": "Syncs your ESPN, Yahoo, and NFL.com fantasy football drafts into Draft Assistant.",
+  "version": "1.8.0",
+  "description": "Syncs your ESPN, Yahoo, and NFL.com fantasy football drafts into Draft Assistant, and submits Sleeper picks you confirm.",
   "action": {
     "default_title": "Draft Assistant",
     "default_popup": "popup.html"
@@ -69,6 +69,18 @@
       "world": "ISOLATED"
     },
     {
+      "matches": ["https://sleeper.com/*"],
+      "js": ["sleeper-inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://sleeper.com/*"],
+      "js": ["sleeper-content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
       "matches": ["https://fantasy.nfl.com/*"],
       "js": ["nfl-inject.js"],
       "run_at": "document_idle",
@@ -110,6 +122,7 @@
     "https://sports.yahoo.com/*",
     "https://fantasy.nfl.com/*",
     "https://api.fantasy.nfl.com/*",
+    "https://sleeper.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "https://draft-bice-omega.vercel.app/*"

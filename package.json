@@ -31,7 +31,7 @@
     "supabase:cron:run:experts:standard": "node scripts/run-ranking-cron.mjs --experts=standard",
     "supabase:cron:run:adp": "node scripts/run-ranking-cron.mjs --adp",
     "supabase:cron:setup": "npm run supabase:push && npm run supabase:functions:deploy && npm run upload:supabase && npm run supabase:cron:configure",
-    "test:extension": "node extension/tests/app-content.test.mjs && node extension/tests/background.test.mjs && node extension/tests/inject.test.mjs && node extension/tests/suggest.test.mjs",
+    "test:extension": "node extension/tests/app-content.test.mjs && node extension/tests/background.test.mjs && node extension/tests/inject.test.mjs && node extension/tests/suggest.test.mjs && node extension/tests/sleeper-pick.test.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "verify": "npm run build && npm run lint && npm run check:intelligence && npm test && npm run test:e2e && npm run test:extension",

@@ -195,6 +195,34 @@ async function openSite(provider, opts, sender) {
   return { ok: true }
 }
 
+const SLEEPER_QUERY = 'https://sleeper.com/*'
+
+/**
+ * Hands a pick to a logged-in sleeper.com tab.
+ *
+ * The pick is submitted by that tab, not by the worker: only a page in
+ * Sleeper's own origin has the session the write needs. A draft tab is
+ * preferred over any other Sleeper tab so the mutation lands in the session
+ * the user is actually drafting from, but any Sleeper tab can carry it.
+ *
+ * Nothing here opens or focuses a tab. This runs on an explicit click while
+ * the user is on the clock, and stealing focus mid-draft is its own bug.
+ */
+async function sleeperDraftPick(message) {
+  const tabs = await chrome.tabs.query({ url: SLEEPER_QUERY })
+  const draftId = String(message.draftId || '')
+  const target = tabs.find((tab) => tab.url && tab.url.includes(draftId)) ?? tabs[0]
+  if (!target?.id) {
+    return { ok: false, error: 'Open your draft on sleeper.com in another tab, then pick again.' }
+  }
+  return chrome.tabs.sendMessage(target.id, {
+    type: 'SLEEPER_DRAFT_PICK',
+    draftId: message.draftId,
+    playerId: message.playerId,
+    pickNo: message.pickNo,
+  })
+}
+
 function siteStorageKey(provider) {
   return provider === 'yahoo' ? 'yahooSnapshot' : 'nflSnapshot'
 }
@@ -534,6 +562,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get('espnValuations').then((data) => {
       sendResponse(data.espnValuations ?? null)
     })
+    return true
+  }
+  if (message?.type === 'SLEEPER_DRAFT_PICK') {
+    sleeperDraftPick(message)
+      .then(sendResponse)
+      .catch(() => sendResponse({ ok: false, error: 'Could not reach the Sleeper tab.' }))
     return true
   }
   if (message?.type === 'REGISTER_APP_ORIGIN' && message.origin) {

@@ -10,18 +10,24 @@ const positionClass = (position: string) => `cc-${position.toLowerCase().replace
 export function BestAvailable({
   recs,
   currentPickNo,
+  targetPickNo,
   onSelect,
 }: {
   recs: Recommendation[]
   currentPickNo: number
+  /** Your next seat. When that is still ahead, recs and value are priced there. */
+  targetPickNo?: number | null
   onSelect: (playerId: string) => void
 }) {
+  const horizonPickNo = targetPickNo != null && targetPickNo > currentPickNo ? targetPickNo : currentPickNo
+  const waiting = horizonPickNo > currentPickNo
+  const title = waiting ? `Best at pick ${horizonPickNo}` : 'Best available'
   const bestRec = recs[0]
   const others = recs.slice(1)
   if (!bestRec) {
     return (
       <section className="cc-card">
-        <div className="cc-card-head"><div className="cc-card-title">Best available</div></div>
+        <div className="cc-card-head"><div className="cc-card-title">{title}</div></div>
         <div className="cc-empty-card">No players available.</div>
       </section>
     )
@@ -32,11 +38,11 @@ export function BestAvailable({
   // ADP, then nothing. `adp ?? searchRank` explained the pick with a number
   // the recommender never used, and stood a rank in for a draft position.
   const baseline = marketBaseline(best)
-  const bestValue = baseline ? currentPickNo - baseline.value : null
+  const bestValue = baseline ? horizonPickNo - baseline.value : null
 
   return (
     <section className="cc-card">
-      <div className="cc-card-head"><div className="cc-card-title">Best available</div></div>
+        <div className="cc-card-head"><div className="cc-card-title">{title}</div></div>
       <button type="button" className="cc-best-player" onClick={() => onSelect(best.id)}>
         <PlayerPhoto player={best} className="cc-avatar-lg" />
         <div>

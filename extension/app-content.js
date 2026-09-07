@@ -109,6 +109,21 @@ window.addEventListener('message', (event) => {
     window.postMessage({ source: SOURCE, type: 'OPEN_ESPN_ACK' }, '*')
     return
   }
+  if (event.data.type === 'SLEEPER_DRAFT_PICK') {
+    const requestId = event.data.requestId
+    chrome.runtime.sendMessage({
+      type: 'SLEEPER_DRAFT_PICK',
+      draftId: event.data.draftId,
+      playerId: event.data.playerId,
+      pickNo: event.data.pickNo,
+    }, (result) => {
+      const failed = chrome.runtime.lastError
+        ? { ok: false, error: 'The Draft Assistant extension is not responding.' }
+        : (result ?? { ok: false, error: 'No answer from the Sleeper tab.' })
+      window.postMessage({ source: SOURCE, type: 'SLEEPER_DRAFT_PICK_RESULT', requestId, ...failed }, '*')
+    })
+    return
+  }
   if (event.data.type === 'PUBLISH_ESPN_SUGGESTIONS') {
     chrome.runtime.sendMessage({
       type: 'PUBLISH_ESPN_SUGGESTIONS',

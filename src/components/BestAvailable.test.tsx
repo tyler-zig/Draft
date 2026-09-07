@@ -104,6 +104,19 @@ describe('BestAvailable', () => {
     expect(dot).toHaveAttribute('title', 'IR')
   })
 
+  it('titles the card for the next seat when that pick is still ahead', () => {
+    render(
+      <BestAvailable
+        currentPickNo={5}
+        targetPickNo={17}
+        onSelect={vi.fn()}
+        recs={[rec({ player: player({ id: '1', fullName: 'Later Back' }), reason: 'Likely there at your pick', reasons: ['Likely there at your pick'] })]}
+      />,
+    )
+    expect(screen.getByText('Best at pick 17')).toBeInTheDocument()
+    expect(screen.getByText('Likely there at your pick')).toBeInTheDocument()
+  })
+
   it('renders an empty state when nobody is left', () => {
     render(<BestAvailable recs={[]} currentPickNo={1} onSelect={vi.fn()} />)
     expect(screen.getByText('No players available.')).toBeInTheDocument()

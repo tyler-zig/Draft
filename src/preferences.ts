@@ -53,7 +53,7 @@ export const TABLE_COLUMNS: Array<{ key: TableColumnKey; label: string; required
   {
     key: 'sos',
     label: 'SoS',
-    hint: "Strength of schedule over the league's playoff weeks only: average positional matchup rank of those opponents, 1 = easiest slate among teams that play in the window. Uses the league's reported playoff weeks (15–17 when it doesn't report them). Blank for chopped / last-man-standing leagues (no playoffs) and when the matchup model is unavailable.",
+    hint: "Strength of schedule over the window that matters: the league's playoff weeks in H2H (15–17 when it does not report them), or weeks 1–4 in chopped / last-man-standing. 1 = easiest slate among teams that play in the window. Blank when the matchup model is unavailable.",
   },
 ]
 

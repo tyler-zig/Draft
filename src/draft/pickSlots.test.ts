@@ -67,6 +67,28 @@ describe('normalizePickSlots', () => {
     const picks = [pick({ draftSlot: 3 })]
     expect(normalizePickSlots(picks, undefined)).toBe(picks)
   })
+
+  // Sleeper's GraphQL board -- the uncached one the room polls -- publishes
+  // only `pick_no`, so the round has to come from the team count.
+  it('derives a missing round from the pick number', () => {
+    const picks = [
+      pick({ playerId: 'a', pickNo: 1, round: 0 }),
+      pick({ playerId: 'b', pickNo: 4, round: 0 }),
+      pick({ playerId: 'c', pickNo: 5, round: 0 }),
+      pick({ playerId: 'd', pickNo: 9, round: 0 }),
+    ]
+    const fixed = normalizePickSlots(picks, room)
+    expect(fixed.map((p) => p.round)).toEqual([1, 1, 2, 3])
+  })
+
+  it('keeps a round the provider reported and leaves off-board keepers alone', () => {
+    const picks = [
+      pick({ playerId: 'a', pickNo: 5, round: 2 }),
+      pick({ playerId: 'k', pickNo: 0, round: 12, isKeeper: true }),
+    ]
+    const fixed = normalizePickSlots(picks, room)
+    expect(fixed.map((p) => p.round)).toEqual([2, 12])
+  })
 })
 
 describe('existing slot arithmetic still holds', () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getDraft, getDraftTradedPicks, getLeague, getLeagueUsers, getNflPlayers, sleeperAvatarUrl } from '../api/sleeper'
-import { mapSleeperPlayer, parsePlayoffWeeks, resolveSleeperDraftLink, sleeperProvider } from './sleeperProvider'
+import { getDraft, getDraftPicks, getDraftTradedPicks, getLeague, getLeagueDrafts, getLeagueUsers, getNflPlayers, getUser, getUserDrafts, getUserLeagues, sleeperAvatarUrl } from '../api/sleeper'
+import { mapSleeperPick, mapSleeperPlayer, parsePlayoffWeeks, resolveSleeperDraftLink, sleeperProvider } from './sleeperProvider'
 import { readPlayerCacheEntry, writePlayerCache } from '../api/playerCache'
 
 vi.mock('../api/playerCache', () => ({
@@ -11,9 +11,14 @@ vi.mock('../api/sleeper', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/sleeper')>()),
   getNflPlayers: vi.fn(),
   getDraft: vi.fn(),
+  getDraftPicks: vi.fn(),
   getLeague: vi.fn(),
   getLeagueUsers: vi.fn(),
   getDraftTradedPicks: vi.fn(),
+  getUser: vi.fn(),
+  getUserLeagues: vi.fn(),
+  getUserDrafts: vi.fn(),
+  getLeagueDrafts: vi.fn(),
 }))
 
 describe('player directory freshness', () => {
@@ -240,6 +245,109 @@ describe('resolveSleeperDraftLink', () => {
         userId: 'mocker',
         isPractice: true,
       })
+  })
+})
+
+describe('mapSleeperPick', () => {
+  it('maps a CPU mock pick with empty picked_by and null roster_id', () => {
+    expect(mapSleeperPick({
+      player_id: '7564',
+      picked_by: '',
+      roster_id: null,
+      round: 1,
+      draft_slot: 1,
+      pick_no: 1,
+      is_keeper: null,
+      metadata: {
+        first_name: "Ja'Marr",
+        last_name: 'Chase',
+        position: 'WR',
+        team: 'CIN',
+        player_id: '7564',
+      },
+    })).toMatchObject({
+      playerId: '7564',
+      pickedByUserId: null,
+      rosterId: null,
+      round: 1,
+      draftSlot: 1,
+      pickNo: 1,
+      meta: { firstName: "Ja'Marr", lastName: 'Chase', position: 'WR', team: 'CIN' },
+    })
+  })
+
+  it('uses metadata.player_id and pick_no when docs omit roster_id and draft_slot', () => {
+    expect(mapSleeperPick({
+      player_id: undefined,
+      picked_by: '667279356739584',
+      pick_no: 3,
+      metadata: { player_id: '536', first_name: 'Antonio', last_name: 'Brown', position: 'WR', team: 'PIT' },
+    })).toMatchObject({
+      playerId: '536',
+      pickNo: 3,
+      rosterId: null,
+      draftSlot: 0,
+    })
+  })
+})
+
+describe('sleeperProvider.getPicks', () => {
+  it('maps the documented pick array', async () => {
+    vi.mocked(getDraftPicks).mockResolvedValue([
+      {
+        player_id: '2391',
+        picked_by: '',
+        roster_id: '1',
+        round: 1,
+        draft_slot: 5,
+        pick_no: 1,
+        is_keeper: null,
+        metadata: { first_name: 'David', last_name: 'Johnson', position: 'RB', team: 'ARI' },
+      },
+    ])
+    await expect(sleeperProvider.getPicks('d1')).resolves.toMatchObject([
+      { playerId: '2391', rosterId: '1', draftSlot: 5, pickNo: 1, meta: { lastName: 'Johnson' } },
+    ])
+  })
+
+  it('treats a non-array body as no picks', async () => {
+    vi.mocked(getDraftPicks).mockResolvedValue(null)
+    await expect(sleeperProvider.getPicks('d1')).resolves.toEqual([])
+  })
+})
+
+describe('sleeperProvider.getLeagues', () => {
+  it('appends a live user mock that is not on any league', async () => {
+    vi.mocked(getUser).mockResolvedValue({
+      user_id: 'u1', username: 'tziegler', display_name: 'Tyler', avatar: null,
+    })
+    vi.mocked(getUserLeagues).mockResolvedValue([{
+      league_id: 'L1', name: 'Wisconsin Dudes', status: 'pre_draft', season: '2026',
+      total_rosters: 18, draft_id: 'official', avatar: null, roster_positions: [],
+      settings: { type: 3 },
+    }])
+    vi.mocked(getLeagueDrafts).mockResolvedValue([{
+      draft_id: 'official', league_id: 'L1', type: 'snake', status: 'pre_draft',
+      sport: 'nfl', season: '2026', start_time: null, settings: { teams: 18 },
+      metadata: { name: 'Wisconsin Dudes' }, draft_order: null, slot_to_roster_id: null,
+    }])
+    vi.mocked(getUserDrafts).mockResolvedValue([{
+      draft_id: '1402482382057000960', league_id: null, type: 'snake', status: 'drafting',
+      sport: 'nfl', season: '2026', start_time: null, settings: { teams: 18 },
+      metadata: { name: 'Wisconsin Dudes', type: 'league_mock', league_type: '3' },
+      draft_order: { u1: 17 }, slot_to_roster_id: null,
+    }])
+
+    const result = await sleeperProvider.getLeagues('tziegler', '2026')
+    expect(result.leagues.map((league) => league.draftId)).toEqual([
+      'official',
+      '1402482382057000960',
+    ])
+    expect(result.leagues[1]).toMatchObject({
+      isPractice: true,
+      leagueFormat: 'chopped',
+      name: 'Wisconsin Dudes (Mock)',
+    })
   })
 })
 

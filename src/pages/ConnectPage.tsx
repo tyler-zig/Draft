@@ -617,7 +617,7 @@ function AddPane({
               {linkLoading ? 'Opening…' : 'Open link'}
             </button>
           </form>
-          <p className="lg-help">League mocks are not listed above. Paste the Sleeper mock URL to sit next to that board.</p>
+          <p className="lg-help">Find leagues also lists your live mocks. Or paste a Sleeper mock URL.</p>
           {sortedLeagues.length ? (
             <div className="lg-found">
               <h3>Found for {displayName ?? 'that username'}</h3>

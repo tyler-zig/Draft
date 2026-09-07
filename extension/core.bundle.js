@@ -75,6 +75,7 @@ var DraftAssistantCore = (() => {
     const counts = emptySlotCounts();
     for (const raw of positions) {
       const key = normalizeSlot(raw);
+      if (!key) continue;
       counts[key] += 1;
     }
     return counts;
@@ -89,7 +90,8 @@ var DraftAssistantCore = (() => {
     if (p === "FLEX" || p === "REC_FLEX" || p === "WRRB_FLEX" || p === "W/R/T" || p === "W/R" || p === "W/T") {
       return "FLEX";
     }
-    if (p === "BN" || p === "BENCH" || p === "IR" || p === "TAXI") return "BN";
+    if (p === "IR" || p === "TAXI" || p === "TAXI_SQUAD" || p === "RESERVE") return null;
+    if (p === "BN" || p === "BENCH") return "BN";
     if (p === "QB" || p === "RB" || p === "WR" || p === "TE") return p;
     return "BN";
   }
@@ -659,6 +661,74 @@ var DraftAssistantCore = (() => {
     return p;
   }
 
+  // src/draft/injuryStatus.ts
+  var SEVERE = /^(out|ir|pup|nfi|dnr|sus|susp|suspended|suspension|injury reserve|injured reserve)$/i;
+  function normalizeInjury(status) {
+    return status.trim().replace(/[_\s-]+/g, " ");
+  }
+  function injuryTone(status) {
+    if (!status) return null;
+    const key = normalizeInjury(status);
+    if (!key || /^active$/i.test(key)) return null;
+    return SEVERE.test(key) ? "out" : "warn";
+  }
+  function isSevereInjury(status) {
+    return injuryTone(status) === "out";
+  }
+
+  // src/draft/chopped.ts
+  var CHOPPED_EARLY_BYE = 7;
+  var CHOPPED_QB_WAIT_ROUNDS = 5;
+  function choppedNeedScale(openStarters, picksLeft) {
+    return Math.min(1, openStarters / Math.max(1, picksLeft * 0.55));
+  }
+  function term(label, delta, reason = label) {
+    return { label, delta, reason };
+  }
+  function choppedTerms(options) {
+    const { player, horizonPickNo, teams, yourPlayers } = options;
+    const terms = [];
+    const earlyRounds = Math.max(1, teams) * CHOPPED_QB_WAIT_ROUNDS;
+    if (player.position === "QB" && horizonPickNo <= earlyRounds) {
+      terms.push(term("Wait on QB", -32));
+    }
+    if (player.yearsExp === 0) {
+      terms.push(term("Rookie volatility", -18));
+    }
+    const stdev = player.rankStdDev;
+    if (stdev != null && stdev >= 10) {
+      terms.push(term("Volatile rank", -16));
+    } else if (stdev != null && stdev > 0 && stdev <= 3) {
+      terms.push(term("High-floor consensus", 10));
+    }
+    const injury = injuryTone(player.injuryStatus);
+    if (injury === "out" && player.injuryStatus) {
+      terms.push(term("Week-1 injury risk", -30, player.injuryStatus));
+    } else if (injury === "warn" && player.injuryStatus) {
+      terms.push(term("Week-1 injury risk", -18, player.injuryStatus));
+    }
+    const bye = player.bye;
+    if (bye != null && bye <= CHOPPED_EARLY_BYE) {
+      const alreadyOnBye = yourPlayers.filter((owned) => owned.bye === bye).length;
+      if (alreadyOnBye >= 1) {
+        terms.push(term(`Early bye week ${bye}`, -14));
+      }
+    }
+    const playerTeam = normalizeTeam(player.team);
+    if (playerTeam) {
+      const stackMate = yourPlayers.find((owned) => normalizeTeam(owned.team) === playerTeam && (player.position === "QB" && (owned.position === "WR" || owned.position === "TE") || (player.position === "WR" || player.position === "TE") && owned.position === "QB"));
+      if (stackMate && (player.bye ?? 99) <= CHOPPED_EARLY_BYE && (stackMate.bye ?? 99) <= CHOPPED_EARLY_BYE && player.bye === stackMate.bye) {
+        terms.push(term(`Shared early bye with ${stackMate.fullName}`, -20));
+      }
+    }
+    const sosRank = player.playoffSos?.rank;
+    if (sosRank != null && sosRank > 0) {
+      if (sosRank <= 8) terms.push(term("Easy weeks 1\u20134", 12));
+      else if (sosRank >= 22) terms.push(term("Tough weeks 1\u20134", -12));
+    }
+    return terms;
+  }
+
   // src/draft/byeWeeks.ts
   function scoreByeFit(options) {
     const { bye, position, addingStarter, roster } = options;
@@ -695,21 +765,6 @@ var DraftAssistantCore = (() => {
     return { delta: 0, reason: null };
   }
 
-  // src/draft/injuryStatus.ts
-  var SEVERE = /^(out|ir|pup|nfi|dnr|sus|susp|suspended|suspension|injury reserve|injured reserve)$/i;
-  function normalizeInjury(status) {
-    return status.trim().replace(/[_\s-]+/g, " ");
-  }
-  function injuryTone(status) {
-    if (!status) return null;
-    const key = normalizeInjury(status);
-    if (!key || /^active$/i.test(key)) return null;
-    return SEVERE.test(key) ? "out" : "warn";
-  }
-  function isSevereInjury(status) {
-    return injuryTone(status) === "out";
-  }
-
   // src/draft/survival.ts
   function erf(x) {
     const sign = x < 0 ? -1 : 1;
@@ -729,6 +784,16 @@ var DraftAssistantCore = (() => {
     }
     return null;
   }
+  function defaultSpread(mean) {
+    if (!(mean > 0)) return 8;
+    return Math.max(6, Math.min(18, mean * 0.12));
+  }
+  function draftSpread(player, mean) {
+    const expert = spreadFor(player);
+    if (expert != null) return expert;
+    if (mean != null && mean > 0) return defaultSpread(mean);
+    return null;
+  }
   function survivalProbability(mean, stdDev, nextPickNo) {
     if (stdDev <= 0) return nextPickNo <= mean ? 1 : 0;
     const z = (nextPickNo - mean) / stdDev;
@@ -741,6 +806,13 @@ var DraftAssistantCore = (() => {
     return {
       delta,
       reason: urgency > 0.5 ? `${Math.round(urgency * 100)}% gone by next pick` : null
+    };
+  }
+  function waitSurvivalAdjustment(survival, baseValue) {
+    const gone = 1 - survival;
+    return {
+      delta: -gone * Math.max(0, baseValue) * 0.9,
+      reason: gone > 0.5 ? `${Math.round(gone * 100)}% gone by your pick` : survival >= 0.7 ? "Likely there at your pick" : null
     };
   }
 
@@ -836,8 +908,15 @@ var DraftAssistantCore = (() => {
       currentPickNo,
       limit = 5,
       queuedIds = [],
-      yourNextPickNo = null
+      yourNextPickNo = null,
+      yourFollowingPickNo = null,
+      leagueFormat = null,
+      teams = 12
     } = options;
+    const chopped = leagueFormat === "chopped";
+    const waiting = yourNextPickNo != null && yourNextPickNo > currentPickNo;
+    const horizonPickNo = waiting ? yourNextPickNo : currentPickNo;
+    const survivalAt = waiting ? yourNextPickNo : yourFollowingPickNo != null && yourFollowingPickNo > currentPickNo ? yourFollowingPickNo : null;
     const queued = new Set(queuedIds);
     const pool = availablePlayers(players, picks);
     const scoreCurve = buildScoreCurve(players);
@@ -846,7 +925,7 @@ var DraftAssistantCore = (() => {
     const yourPlayers = yourPicks.map((p) => playerById.get(p.playerId)).filter((p) => Boolean(p));
     const filled = fillRoster(slots, yourPlayers);
     const remainingByPos = /* @__PURE__ */ new Map();
-    const eliteCutoff = currentPickNo + 24;
+    const eliteCutoff = horizonPickNo + 24;
     for (const player of pool) {
       if (rankOf(player) <= eliteCutoff) {
         remainingByPos.set(
@@ -878,7 +957,7 @@ var DraftAssistantCore = (() => {
     const rosterSpots = Object.values(slots).reduce((sum, count) => sum + count, 0);
     const picksLeft = Math.max(1, rosterSpots - yourPlayers.length);
     const openStarters = filled.filter((slot) => slot.key !== "BN" && !slot.player).length;
-    const needScale = Math.min(1, openStarters / picksLeft);
+    const needScale = chopped ? choppedNeedScale(openStarters, picksLeft) : Math.min(1, openStarters / picksLeft);
     const mustFillStarters = openStarters >= picksLeft;
     const byeRoster = filled.map((slot) => slot.player ? { bye: slot.player.bye, position: slot.player.position, starter: slot.key !== "BN" } : null);
     const rosteredStarters = yourPlayers.filter((p) => p.depthChartOrder != null && p.depthChartOrder > 0 && p.team);
@@ -905,12 +984,12 @@ var DraftAssistantCore = (() => {
         breakdown.push({ label, delta });
       };
       let survival = null;
-      if (yourNextPickNo != null && yourNextPickNo > currentPickNo) {
-        const spread = baseline ? spreadFor(player) : null;
-        if (baseline && spread != null) {
-          survival = survivalProbability(baseline.value, spread, yourNextPickNo);
-          const wait = survivalAdjustment(survival);
-          add(wait.reason ?? "Unlikely to last", wait.delta);
+      if (survivalAt != null && baseline) {
+        const spread = draftSpread(player, baseline.value);
+        if (spread != null) {
+          survival = survivalProbability(baseline.value, spread, survivalAt);
+          const wait = waiting ? waitSurvivalAdjustment(survival, baseScore(player, scoreCurve)) : survivalAdjustment(survival);
+          add(wait.reason ?? (waiting ? "May not last until your pick" : "Unlikely to last"), wait.delta);
           if (wait.reason) reasons.push(wait.reason);
         }
       }
@@ -929,12 +1008,12 @@ var DraftAssistantCore = (() => {
         reasons.unshift("Last chance to fill a starter");
       }
       if (baseline) {
-        const valueGap = currentPickNo - baseline.value;
+        const valueGap = horizonPickNo - baseline.value;
         if (valueGap >= 8) {
           add(`Value vs ${baseline.source}`, 22);
           reasons.push(`Value vs ${baseline.source}`);
         }
-        const reachGap = baseline.value - currentPickNo;
+        const reachGap = baseline.value - horizonPickNo;
         if (reachGap > 18) {
           add(`Reach vs ${baseline.source} ${baseline.value.toFixed(1)}`, -(reachGap - 18) * 1.4);
         }
@@ -983,20 +1062,22 @@ var DraftAssistantCore = (() => {
           reasons.push(`Starter ${starterGone.fullName} already drafted`);
         }
       }
-      if (player.position === "QB" && player.team) {
-        const stackMate = yourPassCatchers.find(
-          (p) => p.team && normalizeTeam(p.team) === normalizeTeam(player.team)
-        );
-        if (stackMate) {
-          add(`Stack with ${stackMate.fullName}`, 12);
-          reasons.push(`Stack with ${stackMate.fullName}`);
+      if (!chopped) {
+        if (player.position === "QB" && player.team) {
+          const stackMate = yourPassCatchers.find(
+            (p) => p.team && normalizeTeam(p.team) === normalizeTeam(player.team)
+          );
+          if (stackMate) {
+            add(`Stack with ${stackMate.fullName}`, 12);
+            reasons.push(`Stack with ${stackMate.fullName}`);
+          }
+        }
+        if ((player.position === "WR" || player.position === "TE") && yourQb?.team && player.team && normalizeTeam(yourQb.team) === normalizeTeam(player.team)) {
+          add(`QB stack with ${yourQb.fullName}`, 12);
+          reasons.push(`QB stack with ${yourQb.fullName}`);
         }
       }
-      if ((player.position === "WR" || player.position === "TE") && yourQb?.team && player.team && normalizeTeam(yourQb.team) === normalizeTeam(player.team)) {
-        add(`QB stack with ${yourQb.fullName}`, 12);
-        reasons.push(`QB stack with ${yourQb.fullName}`);
-      }
-      if (player.depthChartOrder != null && player.depthChartOrder >= 2 && player.vorp != null && player.vorp >= 0) {
+      if (!chopped && player.depthChartOrder != null && player.depthChartOrder >= 2 && player.vorp != null && player.vorp >= 0) {
         add(`Standalone value (${player.position}${player.depthChartOrder})`, 12);
         reasons.push(`Standalone value (${player.position}${player.depthChartOrder})`);
       }
@@ -1011,17 +1092,23 @@ var DraftAssistantCore = (() => {
         add(player.injuryStatus, -40);
         reasons.push(player.injuryStatus);
       }
+      if (chopped) {
+        for (const choppedTerm of choppedTerms({ player, horizonPickNo, teams, yourPlayers })) {
+          add(choppedTerm.label, choppedTerm.delta);
+          if (choppedTerm.reason) reasons.push(choppedTerm.reason);
+        }
+      }
       if (queued.has(player.id)) {
         add("On your queue", 20);
         reasons.unshift("On your queue");
       }
       if (reasons.length === 0) {
-        reasons.push("Best available");
+        reasons.push(waiting ? `Best available at pick ${horizonPickNo}` : "Best available");
       }
       return {
         player,
         score,
-        reason: reasons[0] ?? "Best available",
+        reason: reasons[0] ?? (waiting ? `Best available at pick ${horizonPickNo}` : "Best available"),
         reasons,
         breakdown,
         survivalProbability: survival
@@ -1033,7 +1120,7 @@ var DraftAssistantCore = (() => {
     });
     return scored.slice(0, limit);
   }
-  function suggestionSet(recs, limit = 5) {
+  function suggestionSet(recs, limit = 5, options) {
     if (recs.length <= 1) return recs.slice(0, limit);
     const featured = recs[0];
     const chosen = [featured];
@@ -1045,8 +1132,9 @@ var DraftAssistantCore = (() => {
       chosen.push(rec);
     };
     take(leftover().find((rec) => rec.player.position !== featured.player.position));
+    const withOdds = leftover().filter((rec) => rec.survivalProbability != null);
     take(
-      leftover().filter((rec) => rec.survivalProbability != null && rec.survivalProbability < 0.5).sort((a, b) => (a.survivalProbability ?? 1) - (b.survivalProbability ?? 1))[0]
+      options?.waitForPick ? withOdds.filter((rec) => (rec.survivalProbability ?? 0) >= 0.5).sort((a, b) => (b.survivalProbability ?? 0) - (a.survivalProbability ?? 0))[0] : withOdds.filter((rec) => (rec.survivalProbability ?? 1) < 0.5).sort((a, b) => (a.survivalProbability ?? 1) - (b.survivalProbability ?? 1))[0]
     );
     take(leftover().find((rec) => rec.reasons.some((reason) => reason.startsWith("Open bye "))));
     const usedPositions = new Set(chosen.map((rec) => rec.player.position));

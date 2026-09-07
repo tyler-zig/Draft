@@ -8,6 +8,7 @@ import {
   getLeagueUsers,
   getNflPlayers,
   getUser,
+  getUserDrafts,
   getUserLeagues,
   sleeperAvatarUrl,
   type SleeperDraft,
@@ -24,6 +25,7 @@ import {
   sleeperParentLeagueId,
 } from '../draft/sleeperBoard'
 import { parseSleeperRef } from '../draft/sleeperRef'
+import { requestSleeperPick } from '../sites/sleeperPickBridge'
 import {
   defaultSlotCounts,
   type ConnectedUser,
@@ -105,14 +107,32 @@ function resolveSlots(draft: SleeperDraft, league: SleeperLeague | null): SlotCo
   return hasAny ? fromSettings : defaultSlotCounts()
 }
 
-function mapPick(pick: SleeperPick): DraftPick {
+function optionalPositive(value: string | number | null | undefined) {
+  if (value == null || value === '') return 0
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+/**
+ * Sleeper's pick docs: `picked_by` may be `""`, `roster_id` is a string, and
+ * some rows omit `roster_id` / `draft_slot` / `round`. CPU mock picks also
+ * send `roster_id: null`. Names always live on `metadata` even without the
+ * 5MB player dump.
+ */
+export function mapSleeperPick(pick: SleeperPick): DraftPick {
+  const pickNo = optionalPositive(pick.pick_no)
+  const draftSlot = optionalPositive(pick.draft_slot)
+  const round = optionalPositive(pick.round)
   return {
-    playerId: pick.player_id,
+    playerId: String(pick.player_id ?? pick.metadata?.player_id ?? ''),
     pickedByUserId: pick.picked_by || null,
-    rosterId: pick.roster_id == null ? null : String(pick.roster_id),
-    round: pick.round,
-    draftSlot: pick.draft_slot,
-    pickNo: pick.pick_no,
+    rosterId: pick.roster_id == null || pick.roster_id === '' ? null : String(pick.roster_id),
+    // Left at 0 when Sleeper omits it -- the GraphQL board always does.
+    // `normalizePickSlots` fills it from `pickNo` and the team count, which is
+    // the only place that arithmetic is actually knowable.
+    round,
+    draftSlot,
+    pickNo,
     isKeeper: Boolean(pick.is_keeper),
     meta: pick.metadata
       ? {
@@ -120,10 +140,14 @@ function mapPick(pick: SleeperPick): DraftPick {
           lastName: pick.metadata.last_name ?? '',
           position: pick.metadata.position ?? '',
           team: pick.metadata.team ?? null,
-          injuryStatus: pick.metadata.injury_status ?? null,
+          injuryStatus: pick.metadata.injury_status || null,
         }
       : null,
   }
+}
+
+function asPickList(raw: SleeperPick[] | null | undefined): SleeperPick[] {
+  return Array.isArray(raw) ? raw : []
 }
 
 function optionalId(value: string | number | null | undefined) {
@@ -217,6 +241,25 @@ async function loadPlayers(): Promise<Player[]> {
   return cached.players
 }
 
+function toDraftSummary(draft: SleeperDraft): LeagueSummary {
+  const mock = isSleeperMock(draft)
+  const name = draft.metadata?.name || (mock ? 'Sleeper mock' : 'Sleeper draft')
+  return {
+    id: draft.draft_id,
+    name: mock && !/\bmock\b/i.test(name) ? `${name} (Mock)` : name,
+    season: draft.season,
+    teamCount: draft.settings?.teams ?? 0,
+    status: draft.status,
+    scoringType: mapScoring(draft.metadata?.scoring_type),
+    keeperCount: null,
+    draftId: draft.draft_id,
+    draftStatus: mapDraftStatus(draft.status),
+    avatar: null,
+    isPractice: mock,
+    leagueFormat: detectLeagueFormat(null, draft),
+  }
+}
+
 function toLeagueSummary(
   league: SleeperLeague,
   draft: SleeperDraft | null,
@@ -239,7 +282,10 @@ function toLeagueSummary(
 export const sleeperProvider: DraftProvider = {
   id: 'sleeper',
   label: 'Sleeper',
-  capabilities: { draftPick: false, autoPick: false },
+  // Sleeper can be written to, but only through a logged-in sleeper.com tab
+  // driven by the extension -- never on autopilot. `autoPick` stays false: the
+  // room submits what the user confirms and nothing else.
+  capabilities: { draftPick: true, autoPick: false },
 
   async getLeagues(username, season) {
     const sleeperUser = await getUser(username)
@@ -251,14 +297,25 @@ export const sleeperProvider: DraftProvider = {
       username: sleeperUser.username,
       displayName: sleeperUser.display_name,
     }
-    const leagues = (await getUserLeagues(user.userId, season)) ?? []
+    const [leagues, userDrafts] = await Promise.all([
+      getUserLeagues(user.userId, season),
+      getUserDrafts(user.userId, season).catch(() => [] as SleeperDraft[]),
+    ])
     const summaries = await Promise.all(
-      leagues.map(async (league) => {
+      (leagues ?? []).map(async (league) => {
         const drafts = (await getLeagueDrafts(league.league_id)) ?? []
         const latest = drafts[0] ?? null
         return toLeagueSummary(league, latest)
       }),
     )
+    const knownDraftIds = new Set(summaries.map((league) => league.draftId).filter(Boolean))
+    for (const draft of userDrafts ?? []) {
+      if (!draft?.draft_id || knownDraftIds.has(draft.draft_id)) continue
+      const live = draft.status === 'drafting' || draft.status === 'paused'
+      if (!isSleeperMock(draft) && !live) continue
+      summaries.push(toDraftSummary(draft))
+      knownDraftIds.add(draft.draft_id)
+    }
     return { user, leagues: summaries }
   },
 
@@ -355,8 +412,7 @@ export const sleeperProvider: DraftProvider = {
   },
 
   async getPicks(draftId) {
-    const picks = (await getDraftPicks(draftId)) ?? []
-    return picks.map(mapPick)
+    return asPickList(await getDraftPicks(draftId)).map(mapSleeperPick)
   },
 
   /**
@@ -364,18 +420,28 @@ export const sleeperProvider: DraftProvider = {
    * on the board -- this just names them for the keeper editor.
    */
   async getKeepers(draftId): Promise<KeeperEntry[]> {
-    const picks = (await getDraftPicks(draftId)) ?? []
+    const picks = asPickList(await getDraftPicks(draftId))
     return picks
-      .filter((pick) => pick.is_keeper && pick.player_id)
+      .filter((pick) => pick.is_keeper && (pick.player_id || pick.metadata?.player_id))
       .map((pick) => ({
-        playerId: pick.player_id,
-        rosterId: pick.roster_id == null ? String(pick.draft_slot) : String(pick.roster_id),
+        playerId: String(pick.player_id ?? pick.metadata?.player_id ?? ''),
+        rosterId: pick.roster_id == null ? String(pick.draft_slot ?? '') : String(pick.roster_id),
         round: pick.round ?? null,
         source: 'sleeper' as const,
       }))
   },
 
   getPlayers: loadPlayers,
+
+  /**
+   * Sleeper's `draft_pick_player` mutation, sent by the extension from a tab
+   * that already holds the user's session. The app has no Sleeper credential
+   * of its own and deliberately never asks for one.
+   */
+  async makePick(request) {
+    const result = await requestSleeperPick(request)
+    return { ok: result.ok, error: result.error ?? null }
+  },
 }
 
 /**

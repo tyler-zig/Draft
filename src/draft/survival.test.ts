@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sampleNormal, spreadFor, survivalAdjustment, survivalProbability } from './survival'
+import { defaultSpread, draftSpread, sampleNormal, spreadFor, survivalAdjustment, survivalProbability, waitSurvivalAdjustment } from './survival'
 
 describe('sampleNormal', () => {
   it('is deterministic for an injected rng', () => {
@@ -55,6 +55,31 @@ describe('survivalProbability', () => {
   it('stays within [0, 1]', () => {
     expect(survivalProbability(1, 1, 1000)).toBeGreaterThanOrEqual(0)
     expect(survivalProbability(1000, 1, 1)).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('draftSpread', () => {
+  it('keeps an expert std-dev over the ADP prior', () => {
+    expect(draftSpread({ rankStdDev: 3 }, 40)).toBe(3)
+  })
+
+  it('uses the ADP prior when no expert range exists', () => {
+    expect(draftSpread({}, 50)).toBe(defaultSpread(50))
+    expect(draftSpread({})).toBeNull()
+  })
+})
+
+describe('waitSurvivalAdjustment', () => {
+  it('strips most of the value from a player who will be gone', () => {
+    const adj = waitSurvivalAdjustment(0.05, 100)
+    expect(adj.delta).toBeCloseTo(-85.5, 5)
+    expect(adj.reason).toBe('95% gone by your pick')
+  })
+
+  it('names a lock at the next seat', () => {
+    const adj = waitSurvivalAdjustment(0.9, 40)
+    expect(adj.delta).toBeCloseTo(-3.6, 5)
+    expect(adj.reason).toBe('Likely there at your pick')
   })
 })
 

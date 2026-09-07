@@ -227,11 +227,10 @@ export interface Player {
   /** Value over the replacement-level player at the same position. */
   vorp?: number | null
   /**
-   * Strength of schedule over the league's playoff weeks only: the average
-   * positional matchup rank of the playoff-window opponents. `rank` is the
-   * league-wide ordering (1 = easiest playoff slate) and null when no games
-   * fall in the window. Absent when the schedule model is unavailable or the
-   * position is not matchup-modeled (DEF).
+   * Strength of schedule over the window that matters: playoff weeks in H2H,
+   * or weeks 1–4 in chopped. `rank` is the league-wide ordering (1 = easiest
+   * slate) and null when no games fall in the window. Absent when the
+   * schedule model is unavailable or the position is not matchup-modeled (DEF).
    */
   playoffSos?: { averageMatchupRank: number; rank: number | null; games: number } | null
 }
@@ -278,6 +277,12 @@ export interface ConnectedUser {
   displayName: string
 }
 
+export interface MakePickResult {
+  ok: boolean
+  /** Why the pick did not go through, phrased for the draft room. */
+  error?: string | null
+}
+
 /**
  * League-site adapter. ESPN snapshots come from the Chrome extension.
  */
@@ -295,6 +300,15 @@ export interface DraftProvider {
   getDraft(draftId: string, yourUserId: string): Promise<DraftSession>
   getPicks(draftId: string): Promise<DraftPick[]>
   getPlayers(draftId?: string): Promise<Player[]>
+  /**
+   * Submits a real pick to the league site.
+   *
+   * Present only on providers that can write. `pickNo` is passed explicitly
+   * rather than inferred inside the provider so the caller commits to the
+   * board position it showed the user -- a pick submitted against a stale
+   * number is the one mistake here that cannot be undone.
+   */
+  makePick?(request: { draftId: string; playerId: string; pickNo: number }): Promise<MakePickResult>
   /**
    * Keepers the league site has published. Absent when the provider cannot
    * report them; empty when it can but the league has not locked them yet.

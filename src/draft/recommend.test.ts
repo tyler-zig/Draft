@@ -81,7 +81,7 @@ describe('recommendPicks', () => {
     expect(recs.find((r) => r.player.id === 'survivor')?.reasons).toContain('Last Tier 1 RB')
   })
 
-  it('boosts a player unlikely to survive to the next pick, over one who likely will', () => {
+  it('flags a player unlikely to still be there when scoring the next seat', () => {
     const players = [
       // adp 15, tight spread -- almost certainly gone by pick 40.
       player({ id: 'wont-last', position: 'WR', searchRank: 15, adp: 15, rankLow: 13, rankHigh: 17 }),
@@ -91,13 +91,14 @@ describe('recommendPicks', () => {
     const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 20, yourNextPickNo: 40 })
     const wontLast = recs.find((r) => r.player.id === 'wont-last')
     expect(wontLast?.survivalProbability).toBeLessThan(0.1)
-    expect(wontLast?.reasons.some((reason) => reason.includes('gone by next pick'))).toBe(true)
+    expect(wontLast?.reasons.some((reason) => reason.includes('gone by your pick'))).toBe(true)
   })
 
-  it('leaves survivalProbability null with no spread data to model from', () => {
+  it('models survival from ADP when no expert range is published', () => {
     const players = [player({ id: 'solo', position: 'RB', searchRank: 5, adp: 5 })]
     const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1, yourNextPickNo: 20 })
-    expect(recs[0]?.survivalProbability).toBeNull()
+    expect(recs[0]?.survivalProbability).not.toBeNull()
+    expect(recs[0]?.survivalProbability).toBeLessThan(0.2)
   })
 
   it('flags a position run once half the recent picks share it', () => {
@@ -127,12 +128,30 @@ describe('recommendPicks', () => {
     expect(recs.find((r) => r.player.id === 'candidate')?.reasons.some((reason) => reason.includes('on bye 7'))).toBe(true)
   })
 
-  it('ranks a slightly worse player who will not last above a better one who will', () => {
+  it('ranks the player who will still be there when the next seat is still ahead', () => {
     const players = [
       player({ id: 'will-last', position: 'WR', searchRank: 20, adp: 60, rankLow: 58, rankHigh: 62, vorp: 50 }),
       player({ id: 'wont-last', position: 'RB', searchRank: 25, adp: 15, rankLow: 13, rankHigh: 17, vorp: 42 }),
     ]
     const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 20, yourNextPickNo: 40 })
+    expect(recs[0]?.player.id).toBe('will-last')
+    expect(recs.find((r) => r.player.id === 'wont-last')?.reasons.some((reason) => reason.includes('gone by your pick'))).toBe(true)
+  })
+
+  it('on the clock, ranks a slightly worse player who will not last until the following pick', () => {
+    const players = [
+      player({ id: 'will-last', position: 'WR', searchRank: 20, adp: 60, rankLow: 58, rankHigh: 62, vorp: 50 }),
+      player({ id: 'wont-last', position: 'RB', searchRank: 25, adp: 15, rankLow: 13, rankHigh: 17, vorp: 42 }),
+    ]
+    const recs = recommendPicks({
+      players,
+      picks: [],
+      yourSlot: 1,
+      slots: defaultSlotCounts(),
+      currentPickNo: 20,
+      yourNextPickNo: 20,
+      yourFollowingPickNo: 40,
+    })
     expect(recs[0]?.player.id).toBe('wont-last')
     expect(recs.find((r) => r.player.id === 'will-last')?.reasons.some((reason) => reason.includes('gone by next pick'))).toBe(false)
   })
@@ -269,6 +288,14 @@ describe('suggestionSet', () => {
     const wr = rec({ player: player({ id: 'wr1', position: 'WR' }), score: 150, survivalProbability: 0.9 })
     const gone = rec({ player: player({ id: 'rb2', position: 'RB' }), score: 140, survivalProbability: 0.1, reason: '90% gone by next pick', reasons: ['90% gone by next pick'] })
     const picked = suggestionSet([rb, wr, gone], 3)
+    expect(picked.map((item) => item.player.id)).toEqual(['rb1', 'wr1', 'rb2'])
+  })
+
+  it('when waiting, prefers someone who will still be there over someone who will not', () => {
+    const rb = rec({ player: player({ id: 'rb1', position: 'RB' }), score: 200 })
+    const wr = rec({ player: player({ id: 'wr1', position: 'WR' }), score: 160 })
+    const lock = rec({ player: player({ id: 'rb2', position: 'RB' }), score: 140, survivalProbability: 0.9, reason: 'Likely there at your pick', reasons: ['Likely there at your pick'] })
+    const picked = suggestionSet([rb, wr, lock], 3, { waitForPick: true })
     expect(picked.map((item) => item.player.id)).toEqual(['rb1', 'wr1', 'rb2'])
   })
 })
@@ -463,5 +490,45 @@ describe('the score explains itself', () => {
     const reach = buried.breakdown.find((term) => term.label.startsWith('Reach vs'))
     expect(reach).toBeDefined()
     expect(reach!.delta).toBeLessThan(-200)
+  })
+})
+
+describe('chopped last-man-standing', () => {
+  it('takes a high-floor skill player over an early-round QB', () => {
+    const recs = recommendPicks({
+      players: [
+        player({ id: 'qb', position: 'QB', searchRank: 12, vorp: 48, yearsExp: 6 }),
+        player({ id: 'rb', position: 'RB', searchRank: 14, vorp: 46, yearsExp: 5, rankStdDev: 2 }),
+      ],
+      picks: [],
+      yourSlot: 1,
+      slots: defaultSlotCounts(),
+      currentPickNo: 8,
+      leagueFormat: 'chopped',
+      teams: 18,
+    })
+    expect(recs[0]?.player.id).toBe('rb')
+    expect(recs.find((rec) => rec.player.id === 'qb')?.reasons).toContain('Wait on QB')
+  })
+
+  it('does not pay a stack bonus on a shared early bye', () => {
+    const picks: DraftPick[] = [{
+      playerId: 'wr', pickedByUserId: null, rosterId: null, round: 1, draftSlot: 1, pickNo: 1, isKeeper: false, meta: null,
+    }]
+    const recs = recommendPicks({
+      players: [
+        player({ id: 'wr', position: 'WR', team: 'CIN', bye: 6, fullName: 'Chase', searchRank: 2, vorp: 70 }),
+        player({ id: 'qb', position: 'QB', team: 'CIN', bye: 6, fullName: 'Burrow', searchRank: 20, vorp: 40, yearsExp: 6 }),
+      ],
+      picks,
+      yourSlot: 1,
+      slots: defaultSlotCounts(),
+      currentPickNo: 20,
+      leagueFormat: 'chopped',
+      teams: 18,
+    })
+    const qb = recs.find((rec) => rec.player.id === 'qb')
+    expect(qb?.reasons.some((reason) => reason.startsWith('Stack'))).toBe(false)
+    expect(qb?.reasons.some((reason) => reason.includes('Early bye') || reason.includes('Shared early bye'))).toBe(true)
   })
 })

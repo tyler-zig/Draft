@@ -1,10 +1,11 @@
-import type { DraftPick, Player, SlotCounts } from '../providers/types'
+import type { DraftPick, LeagueFormat, Player, SlotCounts } from '../providers/types'
+import { choppedNeedScale, choppedTerms } from './chopped'
 import { normalizeName, normalizePos, normalizeTeam } from '../rankings/normalize'
 import { scoreByeFit } from './byeWeeks'
 import { fillRoster, needForPosition } from './rosterNeeds'
 import { isSevereInjury } from './injuryStatus'
 import { marketBaseline } from './playerContext'
-import { spreadFor, survivalAdjustment, survivalProbability } from './survival'
+import { draftSpread, survivalAdjustment, survivalProbability, waitSurvivalAdjustment } from './survival'
 
 export interface ScoreTerm {
   label: string
@@ -153,8 +154,12 @@ export function recommendPicks(options: {
   currentPickNo: number
   limit?: number
   queuedIds?: string[]
-  /** Absolute pick number of your next turn, when known -- drives the "take him now, he won't last" bonus. */
+  /** Absolute pick number of your next turn. When that is still ahead, recs are who will be there then. */
   yourNextPickNo?: number | null
+  /** The turn after `yourNextPickNo` -- on the clock, who will not last until then. */
+  yourFollowingPickNo?: number | null
+  leagueFormat?: LeagueFormat | null
+  teams?: number
 }): Recommendation[] {
   const {
     players,
@@ -165,7 +170,18 @@ export function recommendPicks(options: {
     limit = 5,
     queuedIds = [],
     yourNextPickNo = null,
+    yourFollowingPickNo = null,
+    leagueFormat = null,
+    teams = 12,
   } = options
+  const chopped = leagueFormat === 'chopped'
+  const waiting = yourNextPickNo != null && yourNextPickNo > currentPickNo
+  const horizonPickNo = waiting ? yourNextPickNo : currentPickNo
+  const survivalAt = waiting
+    ? yourNextPickNo
+    : yourFollowingPickNo != null && yourFollowingPickNo > currentPickNo
+      ? yourFollowingPickNo
+      : null
   const queued = new Set(queuedIds)
   const pool = availablePlayers(players, picks)
   // Built from the whole pool, not just the available one, so the curve does
@@ -188,7 +204,7 @@ export function recommendPicks(options: {
   // ordering answers honestly -- unlike the value and reach tests below, which
   // are claims about pick numbers and so require a real market.
   const remainingByPos = new Map<string, number>()
-  const eliteCutoff = currentPickNo + 24
+  const eliteCutoff = horizonPickNo + 24
   for (const player of pool) {
     if (rankOf(player) <= eliteCutoff) {
       remainingByPos.set(
@@ -238,7 +254,9 @@ export function recommendPicks(options: {
   const rosterSpots = Object.values(slots).reduce((sum, count) => sum + count, 0)
   const picksLeft = Math.max(1, rosterSpots - yourPlayers.length)
   const openStarters = filled.filter((slot) => slot.key !== 'BN' && !slot.player).length
-  const needScale = Math.min(1, openStarters / picksLeft)
+  const needScale = chopped
+    ? choppedNeedScale(openStarters, picksLeft)
+    : Math.min(1, openStarters / picksLeft)
   /**
    * Every remaining pick has to be a starter or a slot goes empty on Sunday.
    *
@@ -304,17 +322,17 @@ export function recommendPicks(options: {
       breakdown.push({ label, delta })
     }
 
-    // Expected value lost by waiting: a player unlikely to survive to your
-    // next turn is worth taking now even over a similarly-valued player who
-    // probably will still be there. Only meaningful with a real spread to
-    // model from and an actual future pick to compare against.
+    // Waiting: price who will still be there at your seat. On the clock:
+    // take someone who will be gone before you pick again.
     let survival: number | null = null
-    if (yourNextPickNo != null && yourNextPickNo > currentPickNo) {
-      const spread = baseline ? spreadFor(player) : null
-      if (baseline && spread != null) {
-        survival = survivalProbability(baseline.value, spread, yourNextPickNo)
-        const wait = survivalAdjustment(survival)
-        add(wait.reason ?? 'Unlikely to last', wait.delta)
+    if (survivalAt != null && baseline) {
+      const spread = draftSpread(player, baseline.value)
+      if (spread != null) {
+        survival = survivalProbability(baseline.value, spread, survivalAt)
+        const wait = waiting
+          ? waitSurvivalAdjustment(survival, baseScore(player, scoreCurve))
+          : survivalAdjustment(survival)
+        add(wait.reason ?? (waiting ? 'May not last until your pick' : 'Unlikely to last'), wait.delta)
         if (wait.reason) reasons.push(wait.reason)
       }
     }
@@ -339,12 +357,12 @@ export function recommendPicks(options: {
     }
 
     if (baseline) {
-      const valueGap = currentPickNo - baseline.value
+      const valueGap = horizonPickNo - baseline.value
       if (valueGap >= 8) {
         add(`Value vs ${baseline.source}`, 22)
         reasons.push(`Value vs ${baseline.source}`)
       }
-      const reachGap = baseline.value - currentPickNo
+      const reachGap = baseline.value - horizonPickNo
       if (reachGap > 18) {
         add(`Reach vs ${baseline.source} ${baseline.value.toFixed(1)}`, -(reachGap - 18) * 1.4)
       }
@@ -418,27 +436,33 @@ export function recommendPicks(options: {
     // QB stacks: a candidate QB whose top pass-catcher you already own, or a
     // pass-catcher who pairs with your rostered QB. Same-team upside, mild
     // positive. normalizeTeam so alias spellings (JAC/JAX) still pair.
-    if (player.position === 'QB' && player.team) {
-      const stackMate = yourPassCatchers.find(
-        (p) => p.team && normalizeTeam(p.team) === normalizeTeam(player.team),
-      )
-      if (stackMate) {
-        add(`Stack with ${stackMate.fullName}`, 12)
-        reasons.push(`Stack with ${stackMate.fullName}`)
+    // Same-team upside is an H2H / best-ball tool. Chopped dies on a shared
+    // early bye, so that bonus stays off and choppedTerms may penalize it.
+    if (!chopped) {
+      if (player.position === 'QB' && player.team) {
+        const stackMate = yourPassCatchers.find(
+          (p) => p.team && normalizeTeam(p.team) === normalizeTeam(player.team),
+        )
+        if (stackMate) {
+          add(`Stack with ${stackMate.fullName}`, 12)
+          reasons.push(`Stack with ${stackMate.fullName}`)
+        }
       }
-    }
-    if ((player.position === 'WR' || player.position === 'TE')
-      && yourQb?.team && player.team
-      && normalizeTeam(yourQb.team) === normalizeTeam(player.team)) {
-      add(`QB stack with ${yourQb.fullName}`, 12)
-      reasons.push(`QB stack with ${yourQb.fullName}`)
+      if ((player.position === 'WR' || player.position === 'TE')
+        && yourQb?.team && player.team
+        && normalizeTeam(yourQb.team) === normalizeTeam(player.team)) {
+        add(`QB stack with ${yourQb.fullName}`, 12)
+        reasons.push(`QB stack with ${yourQb.fullName}`)
+      }
     }
 
     // Standalone value: a backup worth drafting for his own projection
     // regardless of the handcuff angle. VORP >= 0 means the projection says
     // he outscores a replacement-level starter, which is the same judgment
     // call usage data would make, forward-looking and already in the pool.
-    if (player.depthChartOrder != null && player.depthChartOrder >= 2
+    // Chopped benches get replaced by FAAB after the first chop, so this
+    // is not a reason to take a backup over a safer starter.
+    if (!chopped && player.depthChartOrder != null && player.depthChartOrder >= 2
       && player.vorp != null && player.vorp >= 0) {
       add(`Standalone value (${player.position}${player.depthChartOrder})`, 12)
       reasons.push(`Standalone value (${player.position}${player.depthChartOrder})`)
@@ -457,19 +481,26 @@ export function recommendPicks(options: {
       reasons.push(player.injuryStatus)
     }
 
+    if (chopped) {
+      for (const choppedTerm of choppedTerms({ player, horizonPickNo, teams, yourPlayers })) {
+        add(choppedTerm.label, choppedTerm.delta)
+        if (choppedTerm.reason) reasons.push(choppedTerm.reason)
+      }
+    }
+
     if (queued.has(player.id)) {
       add('On your queue', 20)
       reasons.unshift('On your queue')
     }
 
     if (reasons.length === 0) {
-      reasons.push('Best available')
+      reasons.push(waiting ? `Best available at pick ${horizonPickNo}` : 'Best available')
     }
 
     return {
       player,
       score,
-      reason: reasons[0] ?? 'Best available',
+      reason: reasons[0] ?? (waiting ? `Best available at pick ${horizonPickNo}` : 'Best available'),
       reasons,
       breakdown,
       survivalProbability: survival,
@@ -490,7 +521,11 @@ export function recommendPicks(options: {
  * unused positions. Stops the "also consider" list from being four more of
  * the same back.
  */
-export function suggestionSet(recs: Recommendation[], limit = 5): Recommendation[] {
+export function suggestionSet(
+  recs: Recommendation[],
+  limit = 5,
+  options?: { waitForPick?: boolean },
+): Recommendation[] {
   if (recs.length <= 1) return recs.slice(0, limit)
   const featured = recs[0]!
   const chosen: Recommendation[] = [featured]
@@ -504,10 +539,15 @@ export function suggestionSet(recs: Recommendation[], limit = 5): Recommendation
   }
 
   take(leftover().find((rec) => rec.player.position !== featured.player.position))
+  const withOdds = leftover().filter((rec) => rec.survivalProbability != null)
   take(
-    leftover()
-      .filter((rec) => rec.survivalProbability != null && rec.survivalProbability < 0.5)
-      .sort((a, b) => (a.survivalProbability ?? 1) - (b.survivalProbability ?? 1))[0],
+    options?.waitForPick
+      ? withOdds
+        .filter((rec) => (rec.survivalProbability ?? 0) >= 0.5)
+        .sort((a, b) => (b.survivalProbability ?? 0) - (a.survivalProbability ?? 0))[0]
+      : withOdds
+        .filter((rec) => (rec.survivalProbability ?? 1) < 0.5)
+        .sort((a, b) => (a.survivalProbability ?? 1) - (b.survivalProbability ?? 1))[0],
   )
   take(leftover().find((rec) => rec.reasons.some((reason) => reason.startsWith('Open bye '))))
 

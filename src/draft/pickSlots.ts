@@ -65,7 +65,23 @@ export function pickTeamSlot(pick: DraftPick, room: PickRoom): number {
 }
 
 /**
- * Rewrites every pick's `draftSlot` to the team that actually owns it.
+ * Which round a pick belongs to.
+ *
+ * A provider that reports its own round wins. Sleeper's GraphQL board -- the
+ * uncached one the room polls -- publishes only `pick_no`, exactly as
+ * Sleeper's own client does, so the round is arithmetic from the team count.
+ * Keepers that cost no round sit at `pickNo <= 0` and keep whatever round the
+ * keeper editor gave them.
+ */
+export function pickRound(pick: DraftPick, room: PickRoom): number {
+  if (pick.round > 0) return pick.round
+  if (pick.pickNo > 0 && room.teams > 0) return Math.ceil(pick.pickNo / room.teams)
+  return pick.round
+}
+
+/**
+ * Rewrites every pick's `draftSlot` to the team that actually owns it, and
+ * fills in a round the provider did not report.
  *
  * Done once where picks enter the app so that rosters, recommendations,
  * grades and the overlay all read a self-consistent board -- those consumers
@@ -77,9 +93,10 @@ export function normalizePickSlots<T extends DraftPick>(picks: T[], room: PickRo
   let changed = false
   const next = picks.map((pick) => {
     const slot = pickTeamSlot(pick, room)
-    if (slot === pick.draftSlot) return pick
+    const round = pickRound(pick, room)
+    if (slot === pick.draftSlot && round === pick.round) return pick
     changed = true
-    return { ...pick, draftSlot: slot }
+    return { ...pick, draftSlot: slot, round }
   })
   return changed ? next : picks
 }
