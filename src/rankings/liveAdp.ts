@@ -1,4 +1,5 @@
 import type { Player, ScoringType } from '../providers/types'
+import { isUnsignedFreeAgent } from '../draft/freeAgents'
 import { readRankingArtifact } from '../supabase/artifacts'
 import { matchRows } from './match'
 import type { RankRow } from './types'
@@ -159,7 +160,7 @@ export function applyLiveAdp(
   if (!liveByPlayer.size) return players
   return players.map((player) => {
     const row = liveByPlayer.get(player.id)
-    if (!row) return player
+    if (!row || isUnsignedFreeAgent(player)) return player
     return {
       ...player,
       liveAdp: row.adp ?? null,

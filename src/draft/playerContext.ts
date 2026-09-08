@@ -147,7 +147,7 @@ export function playerDraftContext(options: {
   const survival =
     baseline == null || spread == null || yourNextPickNo == null || yourNextPickNo <= currentPickNo
       ? null
-      : survivalProbability(baseline.value, spread, yourNextPickNo)
+      : survivalProbability(baseline.value, spread, yourNextPickNo, currentPickNo)
   const lastsUntilYourPick =
     yourNextPickNo == null || yourNextPickNo <= currentPickNo
       ? null

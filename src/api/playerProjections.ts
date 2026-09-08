@@ -1,4 +1,5 @@
 import type { Player, ScoringType } from '../providers/types'
+import { isUnsignedFreeAgent } from '../draft/freeAgents'
 import { readRankingArtifact } from '../supabase/artifacts'
 import { mergeCollectedProjections, parseCollectedProjections, type ProjectionSourceLine } from './collectedProjections'
 import type { ProjectedPointsEntry } from './playerHistorical'
@@ -132,6 +133,7 @@ export function attachProjectedAdp(
 ): Player[] {
   if (!projections?.size) return players
   return players.map((player) => {
+    if (isUnsignedFreeAgent(player)) return player
     if (player.adp != null && player.adp > 0) return player
     const projection = lookupPlayerProjection(player, projections)
     const adp = projection ? projectionAdp(projection, scoring) : null

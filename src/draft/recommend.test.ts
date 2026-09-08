@@ -5,7 +5,7 @@ import type { DraftPick, Player } from '../providers/types'
 
 function player(overrides: Partial<Player> & { id: string }): Player {
   return {
-    firstName: overrides.id, lastName: '', fullName: overrides.id, position: 'RB', team: null,
+    firstName: overrides.id, lastName: '', fullName: overrides.id, position: 'RB', team: 'CHI',
     searchRank: 50, injuryStatus: null, number: null, yearsExp: null, bye: null,
     ...overrides,
   }
@@ -19,6 +19,61 @@ describe('recommendPicks', () => {
     ]
     const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1 })
     expect(recs[0]?.player.id).toBe('high-vorp')
+  })
+
+  it('prefers the durable back when two studs project the same', () => {
+    // The case this term exists for. VORP is a 17-game projection, so a back
+    // who has missed 14 games in three years and one who has missed none score
+    // identically on it -- and the board took the fragile one on rank.
+    const fragile = player({
+      id: 'fragile', position: 'RB', searchRank: 3, vorp: 100, age: 24,
+      availability: { projectedAvailability: 0.82, gamesMissed: 14, seasons: 3 },
+    })
+    const durable = player({
+      id: 'durable', position: 'RB', searchRank: 5, vorp: 96, age: 24,
+      availability: { projectedAvailability: 0.93, gamesMissed: 0, seasons: 3 },
+    })
+    const recs = recommendPicks({
+      players: [fragile, durable], picks: [], yourSlot: 1,
+      slots: defaultSlotCounts(), currentPickNo: 1,
+    })
+    expect(recs[0]?.player.id).toBe('durable')
+    expect(recs[1]?.reasons.some((reason) => reason.includes('14 games missed'))).toBe(true)
+  })
+
+  it('discounts an aging back against a younger one at the same projection', () => {
+    const players = [
+      player({ id: 'old', position: 'RB', searchRank: 3, vorp: 100, age: 31 }),
+      player({ id: 'young', position: 'RB', searchRank: 8, vorp: 92, age: 23 }),
+    ]
+    const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1 })
+    expect(recs[0]?.player.id).toBe('young')
+  })
+
+  it('leaves a player with no durability record unadjusted', () => {
+    // Absent history is unknown, not clean -- a rookie must not be scored as
+    // though he had proved anything either way.
+    const rookie = player({ id: 'rookie', position: 'RB', searchRank: 3, vorp: 100, age: 22 })
+    const recs = recommendPicks({
+      players: [rookie], picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1,
+    })
+    const labels = recs[0]!.breakdown.map((term) => term.label)
+    expect(labels).not.toContain('Injury history')
+    expect(labels).not.toContain('Age curve')
+  })
+
+  it('weights an injury history harder in a chopped league', () => {
+    const fragile = {
+      id: 'fragile', position: 'RB' as const, searchRank: 3, vorp: 100, age: 24,
+      availability: { projectedAvailability: 0.82, gamesMissed: 14, seasons: 3 },
+    }
+    const options = {
+      players: [player(fragile)], picks: [], yourSlot: 1,
+      slots: defaultSlotCounts(), currentPickNo: 1,
+    }
+    const injuryTerm = (format: 'chopped' | null) => recommendPicks({ ...options, leagueFormat: format })[0]!
+      .breakdown.find((term) => term.label === 'Injury history')!.delta
+    expect(injuryTerm('chopped')).toBeLessThan(injuryTerm(null))
   })
 
   it('falls back to rank arithmetic for a player with no VORP', () => {
@@ -136,6 +191,20 @@ describe('recommendPicks', () => {
     const recs = recommendPicks({ players, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 20, yourNextPickNo: 40 })
     expect(recs[0]?.player.id).toBe('will-last')
     expect(recs.find((r) => r.player.id === 'wont-last')?.reasons.some((reason) => reason.includes('gone by your pick'))).toBe(true)
+  })
+
+  it('does not claim a fallen player is gone between back-to-back picks', () => {
+    const recs = recommendPicks({
+      players: [player({ id: 'fallen', position: 'WR', searchRank: 15, adp: 15, liveAdp: 15, rankLow: 13, rankHigh: 17, vorp: 40 })],
+      picks: [],
+      yourSlot: 1,
+      slots: defaultSlotCounts(),
+      currentPickNo: 20,
+      yourNextPickNo: 20,
+      yourFollowingPickNo: 21,
+    })
+    expect(recs[0]?.survivalProbability).toBeGreaterThan(0.8)
+    expect(recs[0]?.reasons.some((reason) => reason.includes('gone by next pick'))).toBe(false)
   })
 
   it('on the clock, ranks a slightly worse player who will not last until the following pick', () => {
@@ -363,7 +432,67 @@ describe('positional need answers to the clock', () => {
       yourSlot: 1, slots, currentPickNo: rostered.length + 1,
     })
     expect(recs[0]?.player.id).toBe('fills-hole')
-    expect(recs[0]?.reasons[0]).toBe('Last chance to fill a starter')
+    // The headline stays specific to the player. This term fires for every
+    // eligible player at once, so leading with it said the same thing about
+    // all of them at the moment they most need telling apart.
+    expect(recs[0]?.reasons[0]).toBe('Fill QB')
+    expect(recs[0]?.reasons).toContain('Last chance to fill a starter')
+  })
+
+  describe('streamable starters', () => {
+    // K and DEF are the streamable slots: there is always one on waivers and a
+    // bench spot can be cleared for it after the draft. The discount is not an
+    // opinion about kickers, it is an opinion about having somewhere better to
+    // put the pick -- so it fades as that stops being true.
+    const pool = [
+      player({ id: 'elite-rb', position: 'RB', searchRank: 5, vorp: 100 }),
+      player({ id: 'kicker', position: 'K', searchRank: 150 }),
+      player({ id: 'defense', position: 'DEF', searchRank: 160 }),
+      player({ id: 'scrub', position: 'WR', searchRank: 300, vorp: 1 }),
+    ]
+    const spots = Object.values(slots).reduce((sum, count) => sum + count, 0)
+
+    /** A roster with `picksLeft` spots open and `have` filling the K/DEF slots. */
+    function boardWith(picksLeft: number, have: string[]) {
+      const core = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR']
+      const mine = [...core, ...have].map((position, index) => player({ id: `mine-${position}-${index}`, position, vorp: 1 }))
+      const filler = Array.from({ length: spots - mine.length - picksLeft }, (_, index) => player({ id: `bench-${index}`, position: 'WR', vorp: 1 }))
+      const roster = [...mine, ...filler]
+      const rostered: DraftPick[] = roster.map((p, index) => ({
+        playerId: p.id, pickedByUserId: '1', rosterId: '1', round: index + 1,
+        draftSlot: 1, pickNo: index + 1, isKeeper: false, meta: null,
+      }))
+      return recommendPicks({
+        players: [...pool, ...roster], picks: rostered,
+        yourSlot: 1, slots, currentPickNo: rostered.length + 1, limit: 10,
+      })
+    }
+    const rank = (recs: Recommendation[], id: string) => recs.findIndex((rec) => rec.player.id === id)
+
+    it('takes the better player while there are picks to spare', () => {
+      const recs = boardWith(3, [])
+      expect(recs[0]?.player.id).toBe('elite-rb')
+      // Beatable, not ignored: still ahead of ordinary bench fodder.
+      expect(rank(recs, 'kicker')).toBeLessThan(rank(recs, 'scrub'))
+    })
+
+    it('escalates once the empty slots eat the remaining picks', () => {
+      // Two picks, two empty starter slots: an elite back you cannot start is
+      // worth less than a kicker you can.
+      const recs = boardWith(2, [])
+      expect(recs[0]?.player.id).toBe('kicker')
+      expect(rank(recs, 'defense')).toBeLessThan(rank(recs, 'elite-rb'))
+      expect(recs[0]?.reasons).toContain('Last starter slot (streamable)')
+    })
+
+    it('drops the exemption entirely on the last pick', () => {
+      // Nothing left to trade the slot for, so nothing left to justify it.
+      const recs = boardWith(1, ['DEF'])
+      expect(recs[0]?.player.id).toBe('kicker')
+      expect(recs[0]?.reasons).toContain('Last chance to fill a starter')
+      const forced = recs[0]?.breakdown.find((term) => term.label === 'Last chance to fill a starter')
+      expect(forced?.delta).toBe(600)
+    })
   })
 })
 
@@ -422,13 +551,16 @@ describe('live ADP trend', () => {
 })
 
 describe('free agents', () => {
-  it('still recommends a player with a blank team when he is not a duplicate', () => {
+  it('does not recommend an unsigned player even with leftover VORP and ADP', () => {
     const recs = recommendPicks({
-      players: [player({ id: 'blank-team-star', searchRank: 5, vorp: 80, team: null })],
-      picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1,
+      players: [
+        player({ id: 'blank-team-star', searchRank: 5, vorp: 80, adp: 8, liveAdp: 6, team: null }),
+        player({ id: 'espn-fa', searchRank: 10, vorp: 70, adp: 12, team: 'FA' }),
+        player({ id: 'rostered', searchRank: 40, vorp: 25, team: 'DAL' }),
+      ],
+      picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1, limit: 3,
     })
-    expect(recs[0]?.player.id).toBe('blank-team-star')
-    expect(recs[0]?.reasons).not.toContain('Free agent')
+    expect(recs.map((rec) => rec.player.id)).toEqual(['rostered'])
   })
 
   it('does not recommend an unsigned namesake over the rostered player', () => {
@@ -440,7 +572,7 @@ describe('free agents', () => {
       picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 1, limit: 2,
     })
     expect(recs[0]?.player.id).toBe('rostered')
-    expect(recs.find((rec) => rec.player.id === 'unsigned')?.reasons).toContain('Free agent')
+    expect(recs.find((rec) => rec.player.id === 'unsigned')).toBeUndefined()
   })
 })
 
@@ -494,21 +626,51 @@ describe('the score explains itself', () => {
 })
 
 describe('chopped last-man-standing', () => {
-  it('takes a high-floor skill player over an early-round QB', () => {
+  it('lets VORP price an early-round QB rather than charging him twice', () => {
+    // vorp is already value over the QB12 baseline, which on a real board puts
+    // the top QB (175) far behind the top RB (405). Where the projection says
+    // a quarterback really is worth more over replacement, the board should
+    // say so instead of applying a second flat penalty for the same fact.
     const recs = recommendPicks({
       players: [
         player({ id: 'qb', position: 'QB', searchRank: 12, vorp: 48, yearsExp: 6 }),
-        player({ id: 'rb', position: 'RB', searchRank: 14, vorp: 46, yearsExp: 5, rankStdDev: 2 }),
+        player({ id: 'rb', position: 'RB', searchRank: 14, vorp: 46, yearsExp: 5 }),
       ],
-      picks: [],
-      yourSlot: 1,
-      slots: defaultSlotCounts(),
-      currentPickNo: 8,
-      leagueFormat: 'chopped',
-      teams: 18,
+      picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 8,
+      leagueFormat: 'chopped', teams: 18,
     })
-    expect(recs[0]?.player.id).toBe('rb')
+    expect(recs[0]?.player.id).toBe('qb')
+    expect(recs.find((rec) => rec.player.id === 'qb')?.reasons).not.toContain('Wait on QB')
+  })
+
+  it('still waits on a QB the rank fallback cannot price', () => {
+    const recs = recommendPicks({
+      players: [
+        player({ id: 'qb', position: 'QB', searchRank: 12, yearsExp: 6 }),
+        player({ id: 'rb', position: 'RB', searchRank: 14, yearsExp: 5 }),
+      ],
+      picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 8,
+      leagueFormat: 'chopped', teams: 18,
+    })
     expect(recs.find((rec) => rec.player.id === 'qb')?.reasons).toContain('Wait on QB')
+  })
+
+  it('prefers the steadier back when the projections agree', () => {
+    // The floor signal is the player's own weekly scoring spread against his
+    // positional peers -- not expert disagreement about his draft slot.
+    const pool = [
+      player({ id: 'steady', position: 'RB', searchRank: 14, vorp: 46, consistency: { cv: 0.33, weeks: 17 } }),
+      player({ id: 'boomy', position: 'RB', searchRank: 12, vorp: 48, consistency: { cv: 0.95, weeks: 17 } }),
+      // Enough peers to establish a positional median to judge them against.
+      ...Array.from({ length: 8 }, (_, i) => player({
+        id: `peer${i}`, position: 'RB', searchRank: 100 + i, vorp: 5, consistency: { cv: 0.5 + i * 0.02, weeks: 17 },
+      })),
+    ]
+    const recs = recommendPicks({
+      players: pool, picks: [], yourSlot: 1, slots: defaultSlotCounts(), currentPickNo: 8,
+      leagueFormat: 'chopped', teams: 18,
+    })
+    expect(recs[0]?.player.id).toBe('steady')
   })
 
   it('does not pay a stack bonus on a shared early bye', () => {
@@ -528,7 +690,11 @@ describe('chopped last-man-standing', () => {
       teams: 18,
     })
     const qb = recs.find((rec) => rec.player.id === 'qb')
-    expect(qb?.reasons.some((reason) => reason.startsWith('Stack'))).toBe(false)
-    expect(qb?.reasons.some((reason) => reason.includes('Early bye') || reason.includes('Shared early bye'))).toBe(true)
+    expect(qb?.reasons.some((reason) => reason.startsWith('Stack with'))).toBe(false)
+    // One charge for one fact: two starters off in the same week. A separate
+    // shared-early-bye penalty used to fire alongside the stacked-bye term.
+    const byeTerms = qb!.breakdown.filter((term) => term.label.toLowerCase().includes('bye'))
+    expect(byeTerms).toHaveLength(1)
+    expect(qb?.reasons.some((reason) => reason.includes('bye week 6'))).toBe(true)
   })
 })

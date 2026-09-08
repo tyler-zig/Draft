@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDraft, getDraftPicks, getDraftTradedPicks, getLeague, getLeagueDrafts, getLeagueUsers, getNflPlayers, getUser, getUserDrafts, getUserLeagues, sleeperAvatarUrl } from '../api/sleeper'
 import { mapSleeperPick, mapSleeperPlayer, parsePlayoffWeeks, resolveSleeperDraftLink, sleeperProvider } from './sleeperProvider'
+import { loadPlayerIdCrosswalk } from '../api/playerIdCrosswalk'
 import { readPlayerCacheEntry, writePlayerCache } from '../api/playerCache'
 
 vi.mock('../api/playerCache', () => ({
   readPlayerCacheEntry: vi.fn(),
   writePlayerCache: vi.fn(async () => {}),
+}))
+vi.mock('../api/playerIdCrosswalk', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/playerIdCrosswalk')>()),
+  loadPlayerIdCrosswalk: vi.fn(async () => new Map()),
 }))
 vi.mock('../api/sleeper', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/sleeper')>()),
@@ -27,6 +32,8 @@ describe('player directory freshness', () => {
   beforeEach(() => {
     vi.mocked(readPlayerCacheEntry).mockReset()
     vi.mocked(writePlayerCache).mockClear()
+    vi.mocked(loadPlayerIdCrosswalk).mockReset()
+    vi.mocked(loadPlayerIdCrosswalk).mockResolvedValue(new Map())
     vi.mocked(getNflPlayers).mockReset()
     vi.mocked(getNflPlayers).mockResolvedValue({ '9': { full_name: 'Fetched Back', position: 'RB', active: true } })
   })
@@ -61,6 +68,20 @@ describe('player directory freshness', () => {
     vi.mocked(readPlayerCacheEntry).mockResolvedValue(null)
     await Promise.all([sleeperProvider.getPlayers(), sleeperProvider.getPlayers()])
     expect(getNflPlayers).toHaveBeenCalledTimes(1)
+  })
+
+  it('fills a blank ESPN id from the Sleeper-keyed sheet on a cached directory', async () => {
+    vi.mocked(readPlayerCacheEntry).mockResolvedValue({
+      players: [{ id: '9221', sleeperId: '9221', fullName: 'Jahmyr Gibbs', position: 'RB', searchRank: 1 }] as never,
+      stale: false,
+    })
+    vi.mocked(loadPlayerIdCrosswalk).mockResolvedValue(new Map([
+      ['9221', { espnId: '4429795', yahooId: '40059' }],
+    ]))
+    await expect(sleeperProvider.getPlayers()).resolves.toMatchObject([
+      { id: '9221', espnId: '4429795', yahooId: '40059' },
+    ])
+    expect(getNflPlayers).not.toHaveBeenCalled()
   })
 })
 

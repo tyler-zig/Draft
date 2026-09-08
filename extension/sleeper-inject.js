@@ -36,8 +36,27 @@ const PICK_MUTATION =
  */
 let observedToken = null
 
+/**
+ * Tells the page badge whether a pick could be sent right now.
+ *
+ * Only ever a boolean. The badge needs to distinguish "extension is here" from
+ * "extension can actually pick", and that difference is real: the token is not
+ * observed until sleeper.com makes its first authenticated request, so there
+ * is a window on a cold load where the relay is installed and a pick would
+ * still fail.
+ */
+function publishStatus() {
+  window.postMessage(
+    { source: PAGE_SOURCE, type: 'PICK_STATUS', ready: Boolean(observedToken) },
+    window.location.origin,
+  )
+}
+
 function rememberToken(value) {
-  if (typeof value === 'string' && value.length > 8) observedToken = value
+  if (typeof value !== 'string' || value.length <= 8) return
+  const first = !observedToken
+  observedToken = value
+  if (first) publishStatus()
 }
 
 function headerFrom(init, input) {
@@ -130,6 +149,13 @@ window.addEventListener('message', (event) => {
   if (event.source !== window) return
   if (event.origin !== window.location.origin) return
   if (event.data?.source !== CMD_SOURCE) return
+  // The content script mounts at document_idle, long after this script has
+  // started watching, so it asks for the current state rather than waiting for
+  // a transition it may already have missed.
+  if (event.data.type === 'PICK_STATUS_QUERY') {
+    publishStatus()
+    return
+  }
   if (event.data.type !== 'DRAFT_PICK') return
   void submitPick(event.data.requestId, event.data)
 })

@@ -3,6 +3,9 @@
  *
  * ESPN is filled by the Chrome sync extension (not cookie paste).
  */
+import type { AvailabilityEstimate } from '../draft/availability'
+import type { Consistency } from '../draft/consistency'
+
 export type ProviderId = 'sleeper' | 'espn' | 'yahoo' | 'nfl' | 'demo'
 
 export type ScoringType = 'ppr' | 'half_ppr' | 'std' | 'unknown'
@@ -206,6 +209,18 @@ export interface Player {
    * judge how likely a player is to survive to a future pick.
    */
   rankStdDev?: number | null
+  /**
+   * Recent games-missed history from the intelligence shard index, already
+   * regressed into a projected availability share. Absent when no season of
+   * durability is on record (rookies) or when the published index predates
+   * the field -- both mean "unknown", never "durable".
+   */
+  availability?: AvailabilityEstimate | null
+  /**
+   * Week-to-week scoring spread from the intelligence shard index. Absent for
+   * a player with too few games to read, which the engine treats as unknown.
+   */
+  consistency?: Consistency | null
   /** Enabled ranking-set provenance calculated by the consensus engine. */
   rankLow?: number | null
   rankHigh?: number | null

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { averageStats, flipLastFirst, formatPoints, pointsFromStats, seasonFor } from './projection-stats.mjs'
+import { averageStats, flipLastFirst, formatPoints, isWeeklyProjection, pointsFromStats, rejectOutlierSamples, seasonFor } from './projection-stats.mjs'
 
 describe('flipLastFirst', () => {
   it('turns Last, First into First Last and leaves forward names alone', () => {
@@ -31,6 +31,42 @@ describe('pointsFromStats', () => {
     expect(points.pointsStd).toBe(10)
     expect(points.pointsHalf).toBe(15)
     expect(points.pointsPpr).toBe(20)
+  })
+})
+
+describe('isWeeklyProjection', () => {
+  it('treats a 1-game CBS week-1 line as weekly and a 17-game ROS line as season', () => {
+    expect(isWeeklyProjection({ games: 1, stats: { rush_yd: 94 } })).toBe(true)
+    expect(isWeeklyProjection({ games: 17, stats: { rush_yd: 1436 } })).toBe(false)
+    expect(isWeeklyProjection({ games: null, stats: { sack: 50 } })).toBe(false)
+  })
+
+  it('treats a FantasySharks week-1 CSV (no G column) as weekly', () => {
+    expect(isWeeklyProjection({ games: null, stats: { rush_yd: 63, rec_yd: 31 } })).toBe(true)
+    expect(isWeeklyProjection({ games: null, stats: { rush_yd: 1099, rec_yd: 534 } })).toBe(false)
+  })
+})
+
+describe('rejectOutlierSamples', () => {
+  it('drops a source that is a fraction of the others and keeps a normal spread', () => {
+    const kept = rejectOutlierSamples([
+      { id: 'cbs', stats: { rush_yd: 1400, rec: 80, rec_yd: 600 } },
+      { id: 'espn', stats: { rush_yd: 1372, rec: 68, rec_yd: 546 } },
+      { id: 'fantasysharks', stats: { rush_yd: 63, rec: 3.3, rec_yd: 31 } },
+    ])
+    expect(kept.map((row) => row.id)).toEqual(['cbs', 'espn'])
+    expect(rejectOutlierSamples([
+      { id: 'cbs', stats: { rush_yd: 1200, rec: 50, rec_yd: 400 } },
+      { id: 'espn', stats: { rush_yd: 1300, rec: 60, rec_yd: 450 } },
+      { id: 'fantasysharks', stats: { rush_yd: 1400, rec: 70, rec_yd: 500 } },
+    ]).map((row) => row.id)).toEqual(['cbs', 'espn', 'fantasysharks'])
+  })
+
+  it('needs three sources before it will throw one out', () => {
+    expect(rejectOutlierSamples([
+      { id: 'cbs', stats: { rush_yd: 1400 } },
+      { id: 'fantasysharks', stats: { rush_yd: 63 } },
+    ]).map((row) => row.id)).toEqual(['cbs', 'fantasysharks'])
   })
 })
 

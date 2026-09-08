@@ -12,6 +12,8 @@ import { injuryTone } from '../draft/injuryStatus'
 import type { PlayerDraftContext } from '../draft/playerContext'
 import { loadCurrentDraft, playerIntelligenceHref, scoringLabel } from '../draft/currentDraft'
 import { MarketHistory } from './MarketHistory'
+import { PanelResizeHandles } from './PanelResizeHandles'
+import { usePanelLayout } from '../hooks/usePanelLayout'
 import { PlayerPhoto } from './PlayerPhoto'
 import { PlayerTwitterLink } from './PlayerTwitterLink'
 const UNRANKED = 9999
@@ -191,7 +193,26 @@ function draftCall(player: Player, context: PlayerDraftContext | null, status: s
   return null
 }
 
-export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeeks, isTaken, isKeeper, isQueued, canDraft, canMutateDraft, providerLabel, onClose, onDraft, onToggleQueue }: {
+/**
+ * A staged site pick awaiting confirmation.
+ *
+ * This lives inside the detail sheet rather than in a modal of its own: the
+ * sheet sits at a higher stacking level than the room's modals, so a second
+ * dialog opened from here would be hidden behind the thing that opened it.
+ * Confirming in place is also just less to read -- the player is already on
+ * screen.
+ */
+export interface PendingPickConfirm {
+  playerId: string
+  pickNo: number
+  round: number
+  submitting: boolean
+  error: string | null
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeeks, isTaken, isKeeper, isQueued, canDraft, canMutateDraft, providerLabel, pendingPick, onClose, onDraft, onToggleQueue }: {
   player: Player
   context: PlayerDraftContext | null
   scoringType?: ScoringType
@@ -202,10 +223,16 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
   canDraft: boolean
   canMutateDraft: boolean
   providerLabel: string
+  pendingPick?: PendingPickConfirm | null
   onClose: () => void
   onDraft?: (id: string) => void
   onToggleQueue?: (id: string) => void
 }) {
+  // The card remembers one geometry for every player, not one per player:
+  // you size the card once, and the next player opens where you put it.
+  const { panelRef, style, dragHandleProps, resizeHandleProps, reset, moved } = usePanelLayout('player-detail')
+  // Only this player's own staged pick may take over the footer.
+  const confirming = pendingPick?.playerId === player.id ? pendingPick : null
   const currentDraft = loadCurrentDraft()
   const profileId = player.espnId ?? player.sleeperId ?? player.id
   const fullProfileHref = currentDraft
@@ -249,9 +276,20 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
   }, [onClose])
 
   return <div className="pd-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="pd" role="dialog" aria-modal="true" aria-label={`${player.fullName} details`}>
-      <button type="button" className="pd-close" onClick={onClose} aria-label="Close player details">×</button>
-      <header className={`pd-hero pd-hero-${posClass}`}>
+    <section
+      ref={panelRef as React.Ref<HTMLElement>}
+      className={`pd ${moved ? 'cc-panel-moved' : ''}`}
+      style={style}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${player.fullName} details`}
+    >
+      <PanelResizeHandles resizeHandleProps={resizeHandleProps} />
+      <header
+        className={`pd-hero pd-hero-${posClass} cc-drag-handle`}
+        title="Drag to move · double-click to reset"
+        {...dragHandleProps}
+      >
         <div className="pd-top">
           <div className="pd-who">
             <PlayerPhoto player={player} className="pd-photo" priority />
@@ -273,6 +311,10 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
             <b>{call.value}</b>
             {call.note ? <p>{call.note}</p> : null}
           </div> : null}
+          <div className="pd-chrome">
+            {moved ? <button type="button" className="pd-reset" onClick={reset} aria-label="Reset player card size and position">Reset</button> : null}
+            <button type="button" className="pd-close" onClick={onClose} aria-label="Close player details">×</button>
+          </div>
         </div>
         <section className="pd-stats" aria-label="Profile and market">
           <Stat label="Height" value={shownHeight(player.height)} />
@@ -379,7 +421,17 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
         </aside>
       </div>
 
-      <footer className="pd-actions">
+      {confirming ? <footer className="pd-actions pd-confirm">
+        <div className="pd-confirm-copy">
+          <strong>Send this pick to {providerLabel}?</strong>
+          <span>Round {confirming.round}, pick {confirming.pickNo} · this cannot be undone from here.</span>
+          {confirming.error ? <em role="alert">{confirming.error}</em> : null}
+        </div>
+        <button type="button" className="pd-ghost" disabled={confirming.submitting} onClick={confirming.onCancel}>Cancel</button>
+        <button type="button" className="pd-primary" disabled={confirming.submitting} onClick={confirming.onConfirm}>
+          {confirming.submitting ? 'Sending…' : `Draft ${player.fullName}`}
+        </button>
+      </footer> : <footer className="pd-actions">
         <Link className="pd-ghost" to={fullProfileHref}>Full profile</Link>
         <button
           type="button"
@@ -397,7 +449,7 @@ export function PlayerDetail({ player, context, scoringType = 'ppr', playoffWeek
               onClick={() => onDraft?.(player.id)}
             >{isTaken ? 'Already drafted' : canDraft ? 'Draft player' : 'Not your pick yet'}</button>
           : <span className="pd-readonly">{providerLabel} is read-only · draft on the league site</span>}
-      </footer>
+      </footer>}
     </section>
   </div>
 }

@@ -1,21 +1,27 @@
 /**
  * FantasySharks season projections.
  *
- * Each position is a public CSV (`?csv=1&Position=`). Position 3 is a dead
- * slot that returns "Cache flushed"; WR is 4. The file is header-driven so a
- * column rename fails loudly instead of shifting stats onto the wrong keys.
+ * Each position is a public CSV (`?csv=1&Position=&Segment=`). Position 3 is
+ * a dead slot that returns "Cache flushed"; WR is 4. The file is
+ * header-driven so a column rename fails loudly instead of shifting stats
+ * onto the wrong keys.
  *
- * robots.txt allows the path with Crawl-delay: 60. Honouring that is why this
- * source runs on GitHub Actions rather than an Edge Function.
+ * Once kickoff week starts, omitting Segment defaults to Week 1 (Gibbs:
+ * 63 rush yards). The season board is `{year} NFL Season` in the Period
+ * dropdown (2026 = 874, then +32 per year). robots.txt allows the path
+ * with Crawl-delay: 60. Honouring that is why this source runs on GitHub
+ * Actions rather than an Edge Function.
  */
 
 import { parse } from 'csv-parse/sync'
 import { fetchText, guard } from '../http.mjs'
-import { compactStats, flipLastFirst, hasVolume, pickNumber } from '../projection-stats.mjs'
+import { compactStats, flipLastFirst, hasVolume, isWeeklyProjection, pickNumber, seasonFor } from '../projection-stats.mjs'
 import { clean, normalizePos, normalizeTeam } from '../text.mjs'
 
 const ORIGIN = 'https://www.fantasysharks.com'
 const PAGE = `${ORIGIN}/apps/bert/forecasts/projections.php`
+/** Confirmed live Sept 2026. Later seasons increment by 32. */
+const SEASON_SEGMENT = { year: 2026, id: 874 }
 
 export const SHARK_BOARDS = [
   { id: 'fantasysharks-qb', positionId: 1, position: 'QB', minRows: 25 },
@@ -116,14 +122,56 @@ function statsFromRow(row, position) {
   return stats
 }
 
-function boardUrl(board) {
-  return `${PAGE}?csv=1&Position=${board.positionId}`
+export function seasonSegmentGuess(season) {
+  return SEASON_SEGMENT.id + (Number(season) - SEASON_SEGMENT.year) * 32
+}
+
+export function parseSegments(html) {
+  const block = String(html ?? '').match(/<select[^>]*name=["']Segment["'][^>]*>([\s\S]*?)<\/select>/i)
+  if (!block) return []
+  const options = []
+  for (const match of block[1].matchAll(/<option([^>]*)>([\s\S]*?)<\/option>/gi)) {
+    const value = match[1].match(/value=["'](\d+)["']/i)
+    if (!value) continue
+    const label = clean(match[2].replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, ''))
+    if (label) options.push({ id: Number(value[1]), label })
+  }
+  return options
+}
+
+export function pickSeasonSegment(options, season) {
+  const year = String(season)
+  const seasonRow = options.find((row) => new RegExp(`^${year}\\s+NFL Season$`, 'i').test(row.label))
+  if (seasonRow) return seasonRow.id
+  const ros = options.find((row) => new RegExp(`^${year}\\s+Rest of Year$`, 'i').test(row.label))
+  return ros?.id ?? null
+}
+
+export function boardUrl(board, segment) {
+  const params = new URLSearchParams({ csv: '1', Position: String(board.positionId) })
+  if (segment != null) params.set('Segment', String(segment))
+  return `${PAGE}?${params}`
+}
+
+async function resolveSeasonSegment(options) {
+  if (options.segment != null) return Number(options.segment)
+  const season = options.season ?? seasonFor()
+  const fallback = seasonSegmentGuess(season)
+  try {
+    const verdict = await guard(PAGE, options)
+    if (!verdict.allowed) return fallback
+    const { text } = await fetchText(PAGE, { onRetry: options.onRetry })
+    return pickSeasonSegment(parseSegments(text), season) ?? fallback
+  } catch {
+    return fallback
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function collectBoard(board, options) {
-  const url = boardUrl(board)
+  const segment = options.segment ?? await resolveSeasonSegment(options)
+  const url = boardUrl(board, segment)
   const verdict = await guard(url, options)
   if (!verdict.allowed) throw new Error(`robots.txt disallows FantasySharks projections (${verdict.reason})`)
 
@@ -143,6 +191,10 @@ async function collectBoard(board, options) {
     if (rows.length < board.minRows) {
       throw new Error(`only ${rows.length} FantasySharks ${board.position} rows; the board may have changed`)
     }
+    const weekly = rows.filter((row) => isWeeklyProjection(row)).length
+    if (weekly > rows.length / 2) {
+      throw new Error(`FantasySharks ${board.position} board looks weekly (${weekly}/${rows.length} rows); expected season Segment`)
+    }
 
     return {
       id: board.id,
@@ -158,10 +210,13 @@ async function collectBoard(board, options) {
 }
 
 export function fantasySharksProjectionTasks(options = {}) {
+  const segmentReady = options.segment != null
+    ? Promise.resolve(Number(options.segment))
+    : resolveSeasonSegment(options)
   return SHARK_BOARDS.map((board) => ({
     id: board.id,
-    run: () => collectBoard(board, options),
+    run: async () => collectBoard(board, { ...options, segment: await segmentReady }),
   }))
 }
 
-export const __test__ = { parseCsv, toRow, SHARK_BOARDS, COLUMNS, boardUrl }
+export const __test__ = { parseCsv, toRow, SHARK_BOARDS, COLUMNS, boardUrl, parseSegments, pickSeasonSegment, seasonSegmentGuess }

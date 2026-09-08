@@ -56,6 +56,15 @@ describe('survivalProbability', () => {
     expect(survivalProbability(1, 1, 1000)).toBeGreaterThanOrEqual(0)
     expect(survivalProbability(1000, 1, 1)).toBeLessThanOrEqual(1)
   })
+
+  it('is nearly certain on the next seat once he has already survived this far', () => {
+    expect(survivalProbability(20, 5, 21, 20)).toBeGreaterThan(0.8)
+    expect(survivalProbability(50, 6, 101, 100)).toBeGreaterThan(0.8)
+  })
+
+  it('stays low across a long wait even after conditioning on being here', () => {
+    expect(survivalProbability(15, 4, 40, 20)).toBeLessThan(0.15)
+  })
 })
 
 describe('draftSpread', () => {

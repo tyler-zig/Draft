@@ -74,6 +74,38 @@ export function hasVolume(stats) {
 }
 
 /**
+ * CBS `/season/projections/` and FantasySharks' default Segment both flip
+ * to Week 1 at kickoff. Sharks CSVs often omit G, so games alone cannot
+ * catch a 63-yard Gibbs line. Averaging that into a season consensus
+ * halves VORP.
+ */
+export function isWeeklyProjection(row) {
+  const games = row?.games
+  if (typeof games === 'number' && games > 0 && games <= 3) return true
+  if (typeof games === 'number' && games > 3) return false
+  return looksWeeklyVolume(row?.stats)
+}
+
+/** Starter-sized week-1 totals. Season backups sit above these floors. */
+export function looksWeeklyVolume(stats) {
+  if (!stats || typeof stats !== 'object') return false
+  const pass = stats.pass_yd
+  const rush = stats.rush_yd
+  const rec = stats.rec_yd
+  const fg = stats.fgm
+  const sacks = stats.sack
+  const allowed = stats.pts_allow
+  if (pass > 800 || rush > 300 || rec > 300 || fg > 10 || sacks > 15 || allowed > 80) return false
+  if (typeof pass === 'number' && pass > 0 && pass <= 500) return true
+  if (typeof rush === 'number' && rush > 0 && rush <= 180) return true
+  if (typeof rec === 'number' && rec > 0 && rec <= 180) return true
+  if (typeof fg === 'number' && fg > 0 && fg <= 6) return true
+  if (typeof sacks === 'number' && sacks > 0 && sacks <= 8) return true
+  if (typeof allowed === 'number' && allowed > 0 && allowed <= 50) return true
+  return false
+}
+
+/**
  * Mean of each stat across the sources that published it. A source that omits
  * receptions must not pull the consensus toward zero.
  */
@@ -93,6 +125,53 @@ export function averageStats(rows) {
     if (counts[key]) averaged[key] = sums[key] / counts[key]
   }
   return averaged
+}
+
+/** Drop a source whose PPR volume is under half or over 2.2× the others. */
+export const OUTLIER_LOW = 0.45
+export const OUTLIER_HIGH = 2.2
+export const OUTLIER_MIN_SOURCES = 3
+
+export function volumeScore(stats) {
+  if (!stats || typeof stats !== 'object') return 0
+  return (stats.pass_yd ?? 0) * 0.04
+    + (stats.pass_td ?? 0) * 4
+    + (stats.pass_int ?? 0) * -1
+    + (stats.rush_yd ?? 0) * 0.1
+    + (stats.rush_td ?? 0) * 6
+    + (stats.rec ?? 0)
+    + (stats.rec_yd ?? 0) * 0.1
+    + (stats.rec_td ?? 0) * 6
+    + (stats.fgm ?? 0) * 3
+    + (stats.xpm ?? 0)
+    + (stats.sack ?? 0)
+    + (stats.int ?? 0) * 2
+    + (stats.fum_rec ?? 0) * 2
+    + (stats.def_td ?? 0) * 6
+    + (stats.safe ?? 0) * 2
+}
+
+export function median(values) {
+  const amounts = values.filter((value) => typeof value === 'number' && Number.isFinite(value)).sort((left, right) => left - right)
+  if (!amounts.length) return null
+  const mid = Math.floor(amounts.length / 2)
+  return amounts.length % 2 ? amounts[mid] : (amounts[mid - 1] + amounts[mid]) / 2
+}
+
+/**
+ * A single rogue board (week-1 CBS, career totals, a shifted column) should
+ * not move consensus. Needs three sources so two-way disagreement stays.
+ */
+export function rejectOutlierSamples(samples) {
+  const rows = (samples ?? []).filter((sample) => sample && hasVolume(sample.stats))
+  if (rows.length < OUTLIER_MIN_SOURCES) return rows
+  const scored = rows.map((sample) => ({ sample, points: volumeScore(sample.stats) }))
+  const mid = median(scored.map((row) => row.points))
+  if (!(mid > 0)) return rows
+  const kept = scored
+    .filter((row) => row.points >= mid * OUTLIER_LOW && row.points <= mid * OUTLIER_HIGH)
+    .map((row) => row.sample)
+  return kept.length >= 2 ? kept : rows
 }
 
 export function averageNumber(values) {

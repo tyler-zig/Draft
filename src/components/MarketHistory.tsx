@@ -6,6 +6,13 @@ const date = (value: number) => new Intl.DateTimeFormat(undefined, { month: 'sho
 
 const MODE_LABEL = { liveAdp: 'Live ADP', adp: 'ADP', rank: 'Consensus rank' } as const
 
+const PLOT_LEFT = 40
+const PLOT_RIGHT = 314
+const PLOT_TOP = 12
+const PLOT_BOTTOM = 74
+const PLOT_WIDTH = PLOT_RIGHT - PLOT_LEFT
+const PLOT_HEIGHT = PLOT_BOTTOM - PLOT_TOP
+
 export function MarketHistory({ history, loading = false, compact = false, live = null }: { history?: PlayerMarketHistory; loading?: boolean; compact?: boolean; live?: { at: number; value: number } | null }) {
   if (loading) return <div className="market-history-empty">Loading ranking history…</div>
   const observed = history?.points ?? []
@@ -32,14 +39,25 @@ export function MarketHistory({ history, loading = false, compact = false, live 
     </div>
   }
   const firstAt = points[0].at, lastAt = points.at(-1)?.at ?? firstAt, timeSpread = Math.max(1, lastAt - firstAt)
-  const x = (at: number, index: number) => lastAt === firstAt ? 12 + index * (296 / Math.max(1, points.length - 1)) : 12 + ((at - firstAt) / timeSpread) * 296
-  const y = (value: number) => 12 + ((value - low) / spread) * 62
+  const ticks = [low, low + spread / 2, high]
+  const x = (at: number, index: number) => lastAt === firstAt ? PLOT_LEFT + index * (PLOT_WIDTH / Math.max(1, points.length - 1)) : PLOT_LEFT + ((at - firstAt) / timeSpread) * PLOT_WIDTH
+  const y = (value: number) => PLOT_TOP + ((value - low) / spread) * PLOT_HEIGHT
   const path = points.map((point, index) => `${index ? 'L' : 'M'} ${x(point.at, index).toFixed(1)} ${y(point.value).toFixed(1)}`).join(' ')
   const latest = points.at(-1)!
 
   return <figure className={`market-history ${compact ? 'market-history-compact' : ''}`}>
     <figcaption><span>{label} history</span><b>Now {rank(latest.value)}</b></figcaption>
-    <svg viewBox="0 0 320 88" role="img" aria-label={`${label} history from ${date(firstAt)} to ${date(lastAt)}`}><line x1="12" y1="12" x2="308" y2="12"/><line x1="12" y1="43" x2="308" y2="43"/><line x1="12" y1="74" x2="308" y2="74"/><path d={path}/>{points.map((point, index) => <circle key={`${point.at}-${index}`} cx={x(point.at, index)} cy={y(point.value)} r="2.5"><title>{date(point.at)}: {rank(point.value)}{point.sourceCount ? ` · ${point.sourceCount} source rows` : ' · live board'}</title></circle>)}</svg>
+    <svg viewBox="0 0 320 88" role="img" aria-label={`${label} history from ${date(firstAt)} to ${date(lastAt)}, ${rank(low)} to ${rank(high)}`}>
+      {ticks.map((tick) => {
+        const tickY = y(tick)
+        return <g key={tick}>
+          <line x1={PLOT_LEFT} y1={tickY} x2={PLOT_RIGHT} y2={tickY} />
+          <text x={PLOT_LEFT - 4} y={tickY} textAnchor="end" dominantBaseline="middle">{rank(tick)}</text>
+        </g>
+      })}
+      <path d={path} />
+      {points.map((point, index) => <circle key={`${point.at}-${index}`} cx={x(point.at, index)} cy={y(point.value)} r="2.5"><title>{date(point.at)}: {rank(point.value)}{point.sourceCount ? ` · ${point.sourceCount} source rows` : ' · live board'}</title></circle>)}
+    </svg>
     <footer><span>{date(firstAt)}</span><small>{history?.source}</small><span>{date(lastAt)}</span></footer>
   </figure>
 }

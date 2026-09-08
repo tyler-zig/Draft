@@ -1,3 +1,5 @@
+import type { AvailabilityEstimate } from '../draft/availability'
+import type { Consistency } from '../draft/consistency'
 import type { Player } from '../providers/types'
 
 /**
@@ -28,6 +30,17 @@ export interface PlayerValuation {
   /** Depth-chart position, which drives handcuff and standalone-value reasons. */
   depthChartOrder?: number | null
   bye?: number | null
+  /**
+   * Recent games-missed history, already regressed. ESPN publishes a current
+   * injury designation but nothing about a player's record, and the overlay
+   * runs the same recommender as the app -- without these two the overlay
+   * would quietly score a 30-year-old coming off a lost season as though the
+   * projection were a promise, which is the exact bug this pair exists to fix.
+   */
+  availability?: AvailabilityEstimate | null
+  age?: number | null
+  /** Weekly scoring spread, which drives the chopped floor term. */
+  consistency?: Consistency | null
 }
 
 export interface ValuationTable {
@@ -57,6 +70,9 @@ function valuationFor(player: Player): PlayerValuation | null {
   put('rankHigh', player.rankHigh)
   put('depthChartOrder', player.depthChartOrder)
   put('bye', player.bye)
+  put('availability', player.availability)
+  put('age', player.age)
+  put('consistency', player.consistency)
   return useful ? valuation : null
 }
 

@@ -1,14 +1,15 @@
 /**
- * CBS Sports season projection tables.
+ * CBS Sports rest-of-season projection tables.
  *
- * `/fantasy/football/stats/{POS}/{year}/season/projections/ppr/` is a
- * server-rendered TableBase. Volume is the same on the standard board; we
- * collect PPR so one request per position is enough. Half-PPR is not
- * published (those slugs 301). robots.txt allows `/fantasy/`.
+ * Once kickoff week starts, `/season/projections/` is Week 1 (gp=1, ~90
+ * rush yards for Gibbs). The season-long board moves to
+ * `/restofseason/projections/ppr/`. Volume is the same on the standard
+ * board; we collect PPR so one request per position is enough. Half-PPR
+ * is not published (those slugs 301). robots.txt allows `/fantasy/`.
  */
 
 import { fetchText, guard } from '../http.mjs'
-import { compactStats, hasVolume, seasonFor } from '../projection-stats.mjs'
+import { compactStats, hasVolume, isWeeklyProjection, seasonFor } from '../projection-stats.mjs'
 import { clean, normalizePos, normalizeTeam, toNumber } from '../text.mjs'
 
 const ORIGIN = 'https://www.cbssports.com'
@@ -37,7 +38,7 @@ export const CBS_COLUMNS = {
 
 export function boardUrl(position, season) {
   const slug = position === 'DEF' ? 'DST' : position
-  return `${ORIGIN}/fantasy/football/stats/${slug}/${season}/season/projections/ppr/`
+  return `${ORIGIN}/fantasy/football/stats/${slug}/${season}/restofseason/projections/ppr/`
 }
 
 function cellNumbers(block) {
@@ -116,6 +117,10 @@ async function collectBoard(board, options) {
   const rows = parseBoard(text, board.position)
   if (rows.length < board.minRows) {
     throw new Error(`only ${rows.length} CBS ${board.position} rows; the table may have changed`)
+  }
+  const weekly = rows.filter((row) => isWeeklyProjection(row)).length
+  if (weekly > rows.length / 2) {
+    throw new Error(`CBS ${board.position} board looks weekly (${weekly}/${rows.length} rows); expected rest-of-season`)
   }
 
   return {

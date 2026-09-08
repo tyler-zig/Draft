@@ -6,7 +6,7 @@
  * of whoever published that key.
  */
 
-import { averageNumber, averageStats, formatPoints, hasVolume } from './projection-stats.mjs'
+import { averageNumber, averageStats, formatPoints, hasVolume, isWeeklyProjection, rejectOutlierSamples } from './projection-stats.mjs'
 import { playerKey } from './text.mjs'
 
 export function mergeProjectionSets(sets) {
@@ -30,6 +30,7 @@ export function mergeProjectionSets(sets) {
       }
       entry.espnId ??= row.espnId ?? null
       if (row.espnId && !entry.espnId) entry.espnId = row.espnId
+      if (isWeeklyProjection(row)) continue
       entry.samples.push({
         sourceId,
         stats: row.stats,
@@ -41,15 +42,16 @@ export function mergeProjectionSets(sets) {
 
   return [...players.values()]
     .map((entry) => {
-      const stats = averageStats(entry.samples.map((sample) => sample.stats))
-      const sources = uniqueSources(entry.samples)
+      const samples = rejectOutlierSamples(entry.samples)
+      const stats = averageStats(samples.map((sample) => sample.stats))
+      const sources = uniqueSources(samples)
       const sourceIds = sources.map((source) => source.id)
       return {
         name: entry.name,
         team: entry.team,
         position: entry.position,
         espnId: entry.espnId,
-        games: averageNumber(entry.samples.map((sample) => sample.games)),
+        games: averageNumber(samples.map((sample) => sample.games)),
         stats,
         ...formatPoints(stats),
         sourceIds,

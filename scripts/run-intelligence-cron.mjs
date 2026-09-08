@@ -25,6 +25,7 @@ const { data: requestId, error: invokeError } = await client.rpc('invoke_intelli
 if (invokeError) throw new Error(invokeError.message)
 console.log(`Queued intelligence sync request ${requestId}.`)
 
+let finished = false
 for (let attempt = 0; attempt < 36; attempt += 1) {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000))
   const { data: run, error } = await client.from('intelligence_sync_runs').select('id,status,stats,error,started_at,finished_at').gte('started_at', startedAt).order('started_at', { ascending: false }).limit(1).maybeSingle()
@@ -32,6 +33,7 @@ for (let attempt = 0; attempt < 36; attempt += 1) {
   if (!run || run.status === 'running') continue
   console.log(JSON.stringify(run, null, 2))
   process.exitCode = run.status === 'failed' ? 1 : 0
-  return
+  finished = true
+  break
 }
-throw new Error('The intelligence sync did not finish within three minutes. Check Edge Function logs and intelligence_sync_runs.')
+if (!finished) throw new Error('The intelligence sync did not finish within three minutes. Check Edge Function logs and intelligence_sync_runs.')

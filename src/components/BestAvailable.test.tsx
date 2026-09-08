@@ -53,6 +53,55 @@ describe('BestAvailable', () => {
     expect(screen.getByText('Last Tier 3 TE')).toBeInTheDocument()
   })
 
+  it('expands an also-consider pick and closes the featured stats', async () => {
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <BestAvailable
+        currentPickNo={20}
+        onSelect={onSelect}
+        recs={[
+          rec({ player: player({ id: '1', fullName: 'Featured Back', liveAdp: 10, projectedPoints: 240 }) }),
+          rec({
+            player: player({ id: '2', fullName: 'Alt Receiver', position: 'WR', liveAdp: 35, projectedPoints: 180 }),
+            reason: 'Fill WR',
+            reasons: ['Fill WR'],
+            score: 44,
+            breakdown: [
+              { label: 'Projected value (VORP)', delta: 30 },
+              { label: 'Fill WR', delta: 14 },
+            ],
+          }),
+          rec({
+            player: player({ id: '3', fullName: 'Alt Tight End', position: 'TE', liveAdp: 50 }),
+            reason: 'Last TE',
+            reasons: ['Last TE'],
+          }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByText('+10.0')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand Featured Back suggestion' })).not.toBeInTheDocument()
+    expect(screen.queryByText('-15.0')).not.toBeInTheDocument()
+    expect(screen.queryByText('Why this score (44)')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Expand Alt Receiver suggestion' }))
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.queryByText('+10.0')).not.toBeInTheDocument()
+    expect(screen.getByText('-15.0')).toBeInTheDocument()
+    expect(screen.getByText('Why this score (44)')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Expand Featured Back suggestion' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Expand Alt Tight End suggestion' }))
+    expect(screen.queryByText('-15.0')).not.toBeInTheDocument()
+    expect(screen.getByText('-30.0')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Expand Featured Back suggestion' }))
+    expect(screen.getByText('+10.0')).toBeInTheDocument()
+    expect(screen.queryByText('-30.0')).not.toBeInTheDocument()
+  })
+
   it('opens a listed alternative from the also-consider list', async () => {
     const onSelect = vi.fn()
     const user = userEvent.setup()
@@ -67,7 +116,7 @@ describe('BestAvailable', () => {
       />,
     )
 
-    await user.click(screen.getByRole('button', { name: /Alt Receiver/ }))
+    await user.click(screen.getByText('Alt Receiver').closest('button')!)
     expect(onSelect).toHaveBeenCalledWith('2')
   })
 
@@ -115,6 +164,27 @@ describe('BestAvailable', () => {
     )
     expect(screen.getByText('Best at pick 17')).toBeInTheDocument()
     expect(screen.getByText('Likely there at your pick')).toBeInTheDocument()
+  })
+
+  it('colors value vs live ADP green for a steal and red for a reach', () => {
+    const { rerender } = render(
+      <BestAvailable
+        currentPickNo={40}
+        onSelect={vi.fn()}
+        recs={[rec({ player: player({ id: '1', fullName: 'Value Back', liveAdp: 22 }) })]}
+      />,
+    )
+    expect(screen.getByText('+18.0')).toHaveClass('cc-green')
+
+    rerender(
+      <BestAvailable
+        currentPickNo={12}
+        onSelect={vi.fn()}
+        recs={[rec({ player: player({ id: '1', fullName: 'Reach Back', liveAdp: 28 }) })]}
+      />,
+    )
+    expect(screen.getByText('-16.0')).toHaveClass('cc-red')
+    expect(screen.getByText('-16.0')).not.toHaveClass('cc-green')
   })
 
   it('renders an empty state when nobody is left', () => {

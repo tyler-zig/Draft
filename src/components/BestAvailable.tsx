@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Recommendation } from '../draft/recommend'
 import { marketBaseline } from '../draft/playerContext'
 import { InjuryDot } from './InjuryDot'
@@ -24,7 +24,12 @@ export function BestAvailable({
   const title = waiting ? `Best at pick ${horizonPickNo}` : 'Best available'
   const bestRec = recs[0]
   const others = recs.slice(1)
-  if (!bestRec) {
+  const featuredId = bestRec?.player.id ?? null
+  const [openedId, setOpenedId] = useState<string | null>(null)
+  const expandedId = openedId && recs.some((rec) => rec.player.id === openedId) ? openedId : featuredId
+  const featuredOpen = expandedId === featuredId
+
+  if (!bestRec || !featuredId) {
     return (
       <section className="cc-card">
         <div className="cc-card-head"><div className="cc-card-title">{title}</div></div>
@@ -34,28 +39,95 @@ export function BestAvailable({
   }
 
   const best = bestRec.player
-  // The same market the engine scored him against -- live ADP, then season
-  // ADP, then nothing. `adp ?? searchRank` explained the pick with a number
-  // the recommender never used, and stood a rank in for a draft position.
-  const baseline = marketBaseline(best)
-  const bestValue = baseline ? horizonPickNo - baseline.value : null
 
   return (
     <section className="cc-card">
-        <div className="cc-card-head"><div className="cc-card-title">{title}</div></div>
-      <button type="button" className="cc-best-player" onClick={() => onSelect(best.id)}>
-        <PlayerPhoto player={best} className="cc-avatar-lg" />
-        <div>
-          <strong>{best.fullName}<InjuryDot status={best.injuryStatus} always /></strong>
-          <p><b>{best.position}</b>　{best.team ?? 'Free Agent'}</p>
-          {bestRec.reason !== 'Best available' ? <small className="cc-best-reason">{bestRec.reason}</small> : null}
+      <div className="cc-card-head"><div className="cc-card-title">{title}</div></div>
+      <div className={`cc-best-block${featuredOpen ? '' : ' cc-best-closed'}`}>
+        <div className="cc-best-row">
+          <button type="button" className="cc-best-player" onClick={() => onSelect(best.id)}>
+            <PlayerPhoto player={best} className="cc-avatar-lg" />
+            <div>
+              <strong>{best.fullName}<InjuryDot status={best.injuryStatus} always /></strong>
+              <p><b>{best.position}</b>　{best.team ?? 'Free Agent'}</p>
+              {bestRec.reason !== 'Best available' ? <small className="cc-best-reason">{bestRec.reason}</small> : null}
+            </div>
+          </button>
+          {others.length && !featuredOpen ? (
+            <ExpandButton
+              name={best.fullName}
+              expanded={false}
+              onClick={() => setOpenedId(featuredId)}
+            />
+          ) : null}
         </div>
-      </button>
-      {bestRec.breakdown.length > 1 ? (
+        {featuredOpen ? <SuggestionStats rec={bestRec} horizonPickNo={horizonPickNo} /> : null}
+      </div>
+      {others.length ? (
+        <div className="cc-also">
+          <div className="cc-also-head">Also consider</div>
+          {others.map((rec, index) => {
+            const open = expandedId === rec.player.id
+            return (
+              <div className={`cc-also-item${open ? ' cc-also-open' : ''}`} key={rec.player.id}>
+                <div className="cc-also-row">
+                  <button
+                    type="button"
+                    className="cc-also-pick"
+                    onClick={() => onSelect(rec.player.id)}
+                  >
+                    <span className="cc-n">{index + 2}</span>
+                    <PlayerPhoto player={rec.player} />
+                    <span className="cc-also-who">
+                      <span className="cc-also-line">
+                        <span className="cc-also-name">{rec.player.fullName}</span>
+                        <span className={`cc-p ${positionClass(rec.player.position)}`}>{rec.player.position}</span>
+                      </span>
+                      <small>{rec.reason}</small>
+                    </span>
+                  </button>
+                  <ExpandButton
+                    name={rec.player.fullName}
+                    expanded={open}
+                    onClick={() => setOpenedId(open ? featuredId : rec.player.id)}
+                  />
+                </div>
+                {open ? <SuggestionStats rec={rec} horizonPickNo={horizonPickNo} /> : null}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function ExpandButton({ name, expanded, onClick }: { name: string; expanded: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="cc-also-expand"
+      aria-expanded={expanded}
+      aria-label={expanded ? `Collapse ${name} suggestion` : `Expand ${name} suggestion`}
+      onClick={onClick}
+    >
+      {expanded ? '▴' : '▾'}
+    </button>
+  )
+}
+
+function SuggestionStats({ rec, horizonPickNo }: { rec: Recommendation; horizonPickNo: number }) {
+  const player = rec.player
+  const baseline = marketBaseline(player)
+  const value = baseline ? horizonPickNo - baseline.value : null
+
+  return (
+    <>
+      {rec.breakdown.length > 1 ? (
         <details className="cc-score-breakdown">
-          <summary>Why this score ({Math.round(bestRec.score)})</summary>
+          <summary>Why this score ({Math.round(rec.score)})</summary>
           <ul>
-            {bestRec.breakdown.map((term, index) => (
+            {rec.breakdown.map((term, index) => (
               <li key={`${term.label}-${index}`}>
                 <span>{term.label}</span>
                 <b className={term.delta >= 0 ? 'cc-up' : 'cc-down'}>
@@ -71,58 +143,35 @@ export function BestAvailable({
         <Meter
           label={baseline ? `Value vs ${baseline.source}` : 'Value vs ADP'}
           hint="How many picks later than the market this player is still available: current pick minus his draft position. Positive is a value; negative is a reach. Blank when no source publishes a draft position for him."
-          value={bestValue == null ? '—' : `${bestValue >= 0 ? '+' : ''}${bestValue.toFixed(1)}`}
-          tone="green"
-          width={bestValue == null ? 8 : Math.max(8, Math.min(92, 50 + bestValue * 4))}
+          value={value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}`}
+          tone={value == null || value >= 0 ? 'green' : 'red'}
+          width={value == null ? 8 : Math.max(8, Math.min(92, 50 + value * 4))}
           scale={['-10', '0', '+10']}
         />
         <Meter
           label="Projected Points"
-          hint={best.projectedPoints != null
+          hint={player.projectedPoints != null
             ? "Consensus season projection scored to this league's format — the same figure behind VORP. Hover the number for each source's line."
             : 'No season projection is published for this player.'}
-          value={<ProjectionHover value={best.projectedPoints} breakdown={best.projectionBreakdown} label="Projected points" />}
+          value={<ProjectionHover value={player.projectedPoints} breakdown={player.projectionBreakdown} label="Projected points" />}
           tone="blue"
-          width={best.projectedPoints == null ? 8 : Math.max(8, Math.min(92, best.projectedPoints / 4))}
+          width={player.projectedPoints == null ? 8 : Math.max(8, Math.min(92, player.projectedPoints / 4))}
           scale={['80', '200', '320']}
         />
         <Meter
           label="Tier Dropoff"
           hint="How costly it is to miss this player’s tier. A higher number means the next group is a steeper drop, so waiting is riskier."
-          value={(Math.max(1, best.tier ?? 4) * 2.8).toFixed(1)}
+          value={(Math.max(1, player.tier ?? 4) * 2.8).toFixed(1)}
           tone="green"
           width={62}
           scale={['0', '10', '20']}
         />
       </div>
-      {others.length ? (
-        <div className="cc-also">
-          <div className="cc-also-head">Also consider</div>
-          {others.map((rec, index) => (
-            <button
-              type="button"
-              className="cc-also-row"
-              key={rec.player.id}
-              onClick={() => onSelect(rec.player.id)}
-            >
-              <span className="cc-n">{index + 2}</span>
-              <PlayerPhoto player={rec.player} />
-              <span className="cc-also-who">
-                <span className="cc-also-line">
-                  <span className="cc-also-name">{rec.player.fullName}</span>
-                  <span className={`cc-p ${positionClass(rec.player.position)}`}>{rec.player.position}</span>
-                </span>
-                <small>{rec.reason}</small>
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </section>
+    </>
   )
 }
 
-function Meter({ label, value, tone, width, scale, hint }: { label: string; value: ReactNode; tone: 'green' | 'blue'; width: number; scale: [string, string, string]; hint?: string }) {
+function Meter({ label, value, tone, width, scale, hint }: { label: string; value: ReactNode; tone: 'green' | 'blue' | 'red'; width: number; scale: [string, string, string]; hint?: string }) {
   return (
     <div className="cc-meter">
       <div className="cc-meter-top">

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { DraftPick, Player, PlayoffWeeks, ScoringType } from '../providers/types'
-import type { PlayerDraftContext } from '../draft/playerContext'
+import { marketBaseline, type PlayerDraftContext } from '../draft/playerContext'
 import { getPlayerIntelligence, playerIntelligenceQueryKey } from '../api/playerIntelligence'
-import { PlayerDetail } from './PlayerDetail'
+import { PlayerDetail, type PendingPickConfirm } from './PlayerDetail'
 import { PlayerPhoto } from './PlayerPhoto'
 import { TABLE_COLUMNS, type TableColumnKey } from '../preferences'
 import { formatLiveAdpChange, liveAdpChangeTone } from '../rankings/liveAdp'
@@ -33,8 +33,49 @@ type SortKey = TableColumnKey
 const rankValue = (player: Player) => player.searchRank > 0 ? player.searchRank : 9999
 const shownRank = (player: Player) => rankValue(player) >= 9000 ? '—' : Number.isInteger(player.searchRank) ? player.searchRank : player.searchRank.toFixed(1)
 const tierFor = (player: Player, fallback = 1) => shownTier(player, fallback)
+const MISSING = Number.NaN
 
-export function PlayerTable({ players, picks, canDraft, canMutateDraft, providerLabel, currentPickNo, queuedIds, selectedId, selectedContext, scoringType = 'ppr', playoffWeeks, visibleColumnKeys, onVisibleColumnKeysChange, onSelect, onDraft, onToggleQueue, positionFilter, onPositionFilterChange }: {
+function playerSortValue(player: Player, sortKey: SortKey, currentPickNo: number): string | number {
+  if (sortKey === 'player') return player.fullName
+  if (sortKey === 'position') return player.position
+  if (sortKey === 'team') return player.team ?? 'ZZZ'
+  if (sortKey === 'tier') return tierFor(player)
+  if (sortKey === 'adp') return player.adp ?? rankValue(player)
+  if (sortKey === 'liveAdp') return player.liveAdp ?? MISSING
+  if (sortKey === 'liveAdp1d') return player.liveAdpVsLastOne ?? MISSING
+  if (sortKey === 'liveAdp7d') return player.liveAdpVsLastSeven ?? MISSING
+  if (sortKey === 'projection') return player.projectedPoints ?? MISSING
+  if (sortKey === 'vorp') return player.vorp ?? MISSING
+  if (sortKey === 'value') {
+    const baseline = marketBaseline(player)
+    return baseline ? currentPickNo - baseline.value : MISSING
+  }
+  if (sortKey === 'sos') return player.playoffSos?.rank ?? MISSING
+  return rankValue(player)
+}
+
+/** Blanks stay at the bottom in both directions so a Live ADP change sort shows movers, not dashes. */
+export function comparePlayersBySort(
+  leftPlayer: Player,
+  rightPlayer: Player,
+  sortKey: SortKey,
+  direction: 'asc' | 'desc',
+  currentPickNo: number,
+): number {
+  const left = playerSortValue(leftPlayer, sortKey, currentPickNo)
+  const right = playerSortValue(rightPlayer, sortKey, currentPickNo)
+  const leftMissing = typeof left === 'number' && Number.isNaN(left)
+  const rightMissing = typeof right === 'number' && Number.isNaN(right)
+  if (leftMissing || rightMissing) {
+    if (leftMissing && rightMissing) return rankValue(leftPlayer) - rankValue(rightPlayer)
+    return leftMissing ? 1 : -1
+  }
+  const sign = direction === 'asc' ? 1 : -1
+  const result = typeof left === 'string' && typeof right === 'string' ? left.localeCompare(right) : Number(left) - Number(right)
+  return result * sign || rankValue(leftPlayer) - rankValue(rightPlayer)
+}
+
+export function PlayerTable({ players, picks, canDraft, canMutateDraft, providerLabel, currentPickNo, queuedIds, selectedId, selectedContext, scoringType = 'ppr', playoffWeeks, visibleColumnKeys, onVisibleColumnKeysChange, pendingPick, onSelect, onDraft, onToggleQueue, positionFilter, onPositionFilterChange }: {
   players: Player[]; picks: DraftPick[]; canDraft: boolean; currentPickNo: number; queuedIds: string[]
   /** Draft standing of the selected player, for the detail dialog. */
   selectedContext?: PlayerDraftContext | null
@@ -43,6 +84,8 @@ export function PlayerTable({ players, picks, canDraft, canMutateDraft, provider
   canMutateDraft: boolean; providerLabel: string; visibleColumnKeys: TableColumnKey[]; onVisibleColumnKeysChange: (columns: TableColumnKey[]) => void
   selectedId: string | null; onSelect: (playerId: string | null) => void
   onDraft?: (playerId: string) => void; onToggleQueue?: (playerId: string) => void
+  /** A staged site pick, confirmed inside the detail sheet. */
+  pendingPick?: PendingPickConfirm | null
   positionFilter?: PositionFilter
   onPositionFilterChange?: (position: PositionFilter) => void
 }) {
@@ -65,12 +108,7 @@ export function PlayerTable({ players, picks, canDraft, canMutateDraft, provider
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const filtered = players.filter((player) => (!availableOnly || !taken.has(player.id)) && (pos === 'ALL' || player.position === pos) && (tier === 'ALL' || tierFor(player) === Number(tier)) && (team === 'ALL' || player.team === team) && (!hideInjured || !player.injuryStatus) && (!needle || player.fullName.toLowerCase().includes(needle) || (player.team ?? '').toLowerCase().includes(needle)))
-    const direction = sortDirection === 'asc' ? 1 : -1
-    return filtered.sort((a, b) => {
-      const value = (player: Player): string | number => sortKey === 'player' ? player.fullName : sortKey === 'position' ? player.position : sortKey === 'team' ? player.team ?? 'ZZZ' : sortKey === 'tier' ? tierFor(player) : sortKey === 'adp' ? player.adp ?? rankValue(player) : sortKey === 'liveAdp' ? player.liveAdp ?? Infinity : sortKey === 'liveAdp1d' ? player.liveAdpVsLastOne ?? Infinity : sortKey === 'liveAdp7d' ? player.liveAdpVsLastSeven ?? Infinity : sortKey === 'projection' ? player.projectedPoints ?? -Infinity : sortKey === 'vorp' ? player.vorp ?? -Infinity : sortKey === 'value' ? currentPickNo - (player.adp ?? rankValue(player)) : sortKey === 'sos' ? player.playoffSos?.rank ?? Infinity : rankValue(player)
-      const left = value(a), right = value(b), result = typeof left === 'string' && typeof right === 'string' ? left.localeCompare(right) : Number(left) - Number(right)
-      return result * direction || rankValue(a) - rankValue(b)
-    })
+    return filtered.sort((a, b) => comparePlayersBySort(a, b, sortKey, sortDirection, currentPickNo))
   }, [availableOnly, currentPickNo, hideInjured, players, pos, query, sortDirection, sortKey, taken, team, tier])
   const pageRows = rows.slice(0, visibleCount), selected = selectedId ? players.find((player) => player.id === selectedId) ?? null : null
   const hasMore = visibleCount < rows.length
@@ -91,10 +129,12 @@ export function PlayerTable({ players, picks, canDraft, canMutateDraft, provider
       <div className="cc-tool-wrap cc-spacer"><button type="button" className={`cc-tool ${filterOpen ? 'cc-tool-on' : ''}`} aria-label="Sort and filter" aria-expanded={filterOpen} onClick={() => { setFilterOpen((open) => !open); setCustomizeOpen(false) }}>☷</button>{filterOpen ? <div className="cc-popover cc-filter-popover"><b>Sort &amp; filter</b><label>Sort by<Select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>{TABLE_COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</Select></label><label>Direction<Select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as 'asc' | 'desc')}><option value="asc">Ascending</option><option value="desc">Descending</option></Select></label><label>Team<Select value={team} onChange={(event) => { setTeam(event.target.value); setVisibleCount(PAGE_SIZE) }}><option value="ALL">All teams</option>{teams.map((value) => <option key={value}>{value}</option>)}</Select></label><label className="cc-check"><input type="checkbox" checked={hideInjured} onChange={(event) => { setHideInjured(event.target.checked); setVisibleCount(PAGE_SIZE) }} /> Hide injury-designated</label><button type="button" className="cc-reset" onClick={() => { setTeam('ALL'); setHideInjured(false); setSortKey('rank'); setSortDirection('asc'); setVisibleCount(PAGE_SIZE) }}>Reset</button></div> : null}</div>
       <div className="cc-tool-wrap"><button type="button" className={`cc-tool cc-tool-text ${customizeOpen ? 'cc-tool-on' : ''}`} aria-expanded={customizeOpen} onClick={() => { setCustomizeOpen((open) => !open); setFilterOpen(false) }}>Customize</button>{customizeOpen ? <div className="cc-popover cc-customize-popover"><b>Visible columns</b>{TABLE_COLUMNS.map((column) => <label className="cc-check" key={column.key}><input type="checkbox" checked={visibleColumns.has(column.key)} disabled={column.required} onChange={() => toggleColumn(column.key)} /> {column.label}</label>)}</div> : null}</div>
     </div>
-    {selected ? <PlayerDetail player={selected} context={selectedContext ?? null} scoringType={scoringType} playoffWeeks={playoffWeeks} isTaken={taken.has(selected.id)} isKeeper={kept.has(selected.id)} isQueued={queued.has(selected.id)} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={providerLabel} onClose={() => onSelect(null)} onDraft={onDraft} onToggleQueue={onToggleQueue} /> : null}
+    {selected ? <PlayerDetail player={selected} context={selectedContext ?? null} scoringType={scoringType} playoffWeeks={playoffWeeks} isTaken={taken.has(selected.id)} isKeeper={kept.has(selected.id)} isQueued={queued.has(selected.id)} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={providerLabel} pendingPick={pendingPick} onClose={() => onSelect(null)} onDraft={onDraft} onToggleQueue={onToggleQueue} /> : null}
     <div className="cc-table-wrap" ref={rootRef}><table className="cc-player-table"><thead><tr>{TABLE_COLUMNS.filter((column) => visibleColumns.has(column.key)).map((column) => <th key={column.key} className={column.compact ? 'cc-col-fit' : undefined}><button type="button" className="cc-sort-head" title={column.hint} onClick={() => changeSort(column.key)}>{column.label}{column.hint && !column.compact ? <i className="cc-hint" aria-hidden="true">ⓘ</i> : null}{sortKey === column.key ? <span>{sortDirection === 'asc' ? '▲' : '▼'}</span> : null}</button></th>)}</tr></thead><tbody>
       {pageRows.map((player, index) => {
-        const inQueue = queued.has(player.id), isTaken = taken.has(player.id), base = player.adp ?? rankValue(player), value = base >= 9000 ? null : currentPickNo - base
+        const inQueue = queued.has(player.id), isTaken = taken.has(player.id)
+        const market = marketBaseline(player)
+        const value = market ? currentPickNo - market.value : null
         const playerTier = tierFor(player, index + 1), projection = player.projectedPoints
         const cells: Record<TableColumnKey, React.ReactNode> = {
           rank: <div className="cc-rank"><button type="button" disabled={isTaken} className={`cc-star ${inQueue ? 'cc-on' : ''}`} onClick={(event) => { event.stopPropagation(); onToggleQueue?.(player.id) }} aria-label={inQueue ? 'Remove from queue' : 'Add to queue'}>★</button>{shownRank(player)}</div>,

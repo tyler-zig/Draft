@@ -67,14 +67,38 @@ export function sampleNormal(rng: () => number = Math.random): number {
   return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
 }
 
+function survivePast(mean: number, stdDev: number, pickNo: number): number {
+  if (stdDev <= 0) return pickNo <= mean ? 1 : 0
+  const z = (pickNo - mean) / stdDev
+  return Math.min(1, Math.max(0, 1 - normalCdf(z)))
+}
+
 /**
  * Probability a player drafted from Normal(mean, stdDev) is still available
- * at `nextPickNo` -- i.e. his actual draft position falls at or after it.
+ * at `nextPickNo`. When `availableAt` is set, this is conditional on him
+ * already being on the board there -- unconditional P(slot >= next) is ~0
+ * for anyone who has fallen past ADP, which printed "80% gone" on
+ * back-to-back picks.
  */
-export function survivalProbability(mean: number, stdDev: number, nextPickNo: number): number {
-  if (stdDev <= 0) return nextPickNo <= mean ? 1 : 0
-  const z = (nextPickNo - mean) / stdDev
-  return Math.min(1, Math.max(0, 1 - normalCdf(z)))
+export function survivalProbability(
+  mean: number,
+  stdDev: number,
+  nextPickNo: number,
+  availableAt?: number | null,
+): number {
+  if (availableAt != null && nextPickNo <= availableAt) return 1
+  const surviveTo = survivePast(mean, stdDev, nextPickNo)
+  if (availableAt == null) return surviveTo
+  const gap = nextPickNo - availableAt
+  // Back-to-back (or one intervening pick): the next team takes one player.
+  // Unconditional ADP already expired, so the old CDF printed 80% gone.
+  if (gap <= 1) return 1
+  const alreadyHere = survivePast(mean, stdDev, availableAt)
+  const pastAdp = (availableAt - mean) / Math.max(stdDev, 1)
+  if (alreadyHere <= 1e-3 || pastAdp >= 2.5) {
+    return Math.exp(-gap / Math.max(stdDev, 6))
+  }
+  return Math.min(1, surviveTo / alreadyHere)
 }
 
 /**

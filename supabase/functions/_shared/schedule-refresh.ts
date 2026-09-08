@@ -32,6 +32,13 @@ export interface PublishedIntelligence {
     position: string
     seasons: Array<{
       season: number
+      // Declared but not read here, for the same reason identity is: these
+      // records go straight to `buildPlayerShards`, which lifts the recent
+      // games-missed window into the shard index. Leaving them off the type
+      // let a refresh republish an index with the durability silently
+      // dropped, which reads downstream as a clean injury record.
+      gamesPlayed?: number
+      durability?: { gamesMissed?: number } | null
       weekly: Array<{ week: number; opponent: string; fantasyPoints: number; fantasyPointsPpr: number }>
     }>
   }>

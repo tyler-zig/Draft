@@ -1,3 +1,4 @@
+import { applyPlayerIdCrosswalk, loadPlayerIdCrosswalk } from '../api/playerIdCrosswalk'
 import { readPlayerCacheEntry, writePlayerCache } from '../api/playerCache'
 import {
   getDraft,
@@ -206,15 +207,16 @@ export function mapSleeperPlayer(id: string, raw: SleeperPlayer): Player | null 
 }
 
 async function fetchPlayers(): Promise<Player[]> {
-  const raw = await getNflPlayers()
+  const [raw, crosswalk] = await Promise.all([getNflPlayers(), loadPlayerIdCrosswalk()])
   const players: Player[] = []
   for (const [id, value] of Object.entries(raw ?? {})) {
     const mapped = mapSleeperPlayer(id, value)
     if (mapped) players.push(mapped)
   }
   players.sort((a, b) => a.searchRank - b.searchRank)
-  await writePlayerCache(players)
-  return players
+  const linked = applyPlayerIdCrosswalk(players, crosswalk)
+  await writePlayerCache(linked)
+  return linked
 }
 
 /** One in-flight refresh at a time, however many callers ask for players. */
@@ -238,7 +240,10 @@ async function loadPlayers(): Promise<Player[]> {
     // usable cached directory into an error.
     void refreshPlayers().catch(() => {})
   }
-  return cached.players
+  // Sleeper's dump omits espn_id for most of the 2026 board. Fill from the
+  // published Sleeper→ESPN sheet even when the cached directory predates it.
+  const crosswalk = await loadPlayerIdCrosswalk()
+  return applyPlayerIdCrosswalk(cached.players, crosswalk)
 }
 
 function toDraftSummary(draft: SleeperDraft): LeagueSummary {

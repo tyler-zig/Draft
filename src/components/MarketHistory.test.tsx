@@ -19,7 +19,9 @@ describe('MarketHistory', () => {
     ])} />)
     expect(screen.getByText('Live ADP history')).toBeInTheDocument()
     expect(screen.getByText('Now 9')).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: /Live ADP history/ })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Live ADP history from .*9 to 10/ })).toBeInTheDocument()
+    expect(screen.getByText('9.5')).toBeInTheDocument()
+    expect(screen.getByText('10')).toBeInTheDocument()
   })
 
   it('does not start a Live ADP series from one collected point plus the room board', () => {
@@ -69,6 +71,17 @@ describe('MarketHistory', () => {
       point({ at: 200, adp: null, rank: 7 }),
     ])} />)
     expect(screen.getByText('Consensus rank history')).toBeInTheDocument()
+  })
+
+  it('labels the ADP scale from the observed high, midpoint, and low', () => {
+    render(<MarketHistory history={history([
+      point({ at: 100, liveAdp: 12.4 }),
+      point({ at: 200, liveAdp: 8 }),
+    ])} />)
+    expect(screen.getByText('8')).toBeInTheDocument()
+    expect(screen.getByText('10.2')).toBeInTheDocument()
+    expect(screen.getByText('12.4')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /8 to 12.4/ })).toBeInTheDocument()
   })
 
   it('says so when the live board position has not moved', () => {

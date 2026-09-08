@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseBoard } from './cbs-projections.mjs'
+import { boardUrl, parseBoard } from './cbs-projections.mjs'
 
 const rbHtml = `
 <table><tr class="TableBase-bodyTr">
@@ -45,6 +45,13 @@ const dstHtml = `
 <td class="TableBase-bodyTd TableBase-bodyTd--number">6.5</td>
 </tr></table>
 `
+
+describe('boardUrl', () => {
+  it('reads the rest-of-season board, not the week-1 /season/ slug', () => {
+    expect(boardUrl('RB', 2026)).toBe('https://www.cbssports.com/fantasy/football/stats/RB/2026/restofseason/projections/ppr/')
+    expect(boardUrl('DEF', 2026)).toBe('https://www.cbssports.com/fantasy/football/stats/DST/2026/restofseason/projections/ppr/')
+  })
+})
 
 describe('parseBoard', () => {
   it('reads a running-back volume line from TableBase cells', () => {

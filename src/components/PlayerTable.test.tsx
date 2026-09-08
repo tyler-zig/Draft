@@ -2,11 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DraftPick, Player } from '../providers/types'
 import { TABLE_COLUMNS } from '../preferences'
 import { flushIntersectionObservers } from '../test/setup'
-import { PlayerTable } from './PlayerTable'
+import { comparePlayersBySort, PlayerTable } from './PlayerTable'
 
 vi.mock('../api/playerIntelligence', async () => {
   const actual = await vi.importActual<typeof import('../api/playerIntelligence')>('../api/playerIntelligence')
@@ -85,6 +85,8 @@ function renderTable(overrides: Partial<React.ComponentProps<typeof PlayerTable>
 }
 
 describe('PlayerTable interactions', () => {
+  afterEach(() => { localStorage.removeItem('draft-assistant:panel:player-detail') })
+
   it('loads players incrementally and filters the list', async () => {
     const user = userEvent.setup()
     renderTable()
@@ -110,6 +112,34 @@ describe('PlayerTable interactions', () => {
     await user.click(screen.getByLabelText('Available Only'))
     expect(screen.getByText('First1 Player1')).toBeInTheDocument()
     expect(screen.getByText('Drafted')).toBeInTheDocument()
+  })
+
+  it('keeps Reset and close in the header row instead of over the pick call', () => {
+    renderTable({
+      selectedId: '2',
+      selectedContext: {
+        takenBy: null, positionRank: 1, positionDrafted: 0, tierRemaining: 3,
+        need: { kind: 'starter', label: 'Fill WR1' },
+        valueVsPick: -4, baselineSource: 'live ADP', yourNextPickNo: 12, lastsUntilYourPick: false,
+        survivalProbability: 0.22,
+      },
+      players: players.map((player) => player.id === '2' ? { ...player, liveAdp: 4.7 } : player),
+    })
+    const dialog = screen.getByRole('dialog', { name: 'First2 Player2 details' })
+    const close = within(dialog).getByRole('button', { name: 'Close player details' })
+    const call = within(dialog).getByText('Gone by then')
+    const row = close.closest('.pd-top')
+    expect(row).toContainElement(call)
+    expect(within(dialog).queryByRole('button', { name: 'Reset player card size and position' })).not.toBeInTheDocument()
+
+    const hero = dialog.querySelector('.pd-hero')!
+    fireEvent.pointerDown(hero, { button: 0, pointerId: 1, clientX: 400, clientY: 200 })
+    fireEvent.pointerMove(hero, { pointerId: 1, clientX: 460, clientY: 250 })
+    fireEvent.pointerUp(hero, { pointerId: 1, clientX: 460, clientY: 250 })
+
+    const reset = within(dialog).getByRole('button', { name: 'Reset player card size and position' })
+    expect(row).toContainElement(reset)
+    expect(reset.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('opens player details and gates drafting for read-only providers', () => {
@@ -250,6 +280,33 @@ describe('PlayerTable interactions', () => {
     expect(screen.getByLabelText(/Consensus 353\.5.*CBS 348\.2.*ESPN 364\.9/s)).toBeInTheDocument()
   })
 
+  it('calculates Value against live ADP, not season ADP', () => {
+    renderTable({
+      currentPickNo: 20,
+      picks: [],
+      players: [
+        { ...players[1], fullName: 'Live Faller', adp: 40, liveAdp: 8 },
+        { ...players[2], fullName: 'Season Only', adp: 8 },
+        { ...players[3], fullName: 'No Market' },
+      ],
+    })
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent ?? '')
+    const valueIndex = headers.findIndex((header) => /^Value/.test(header))
+    const cell = (name: string) => screen.getByText(name).closest('tr')?.querySelectorAll('td')?.[valueIndex]
+    // Season ADP 40 at pick 20 would print -20.0; live ADP 8 is a faller.
+    expect(cell('Live Faller')).toHaveTextContent('+12.0')
+    expect(cell('Season Only')).toHaveTextContent('+12.0')
+    expect(cell('No Market')).toHaveTextContent('—')
+  })
+
+  it('sorts Value by live ADP and keeps blanks last', () => {
+    const fallen = { ...players[1], fullName: 'Fallen', searchRank: 2, liveAdp: 8 }
+    const reach = { ...players[2], fullName: 'Reach', searchRank: 3, liveAdp: 40, adp: 8 }
+    const blank = { ...players[3], fullName: 'Blank', searchRank: 4 }
+    expect([reach, blank, fallen].sort((a, b) => comparePlayersBySort(a, b, 'value', 'desc', 20)).map((player) => player.fullName))
+      .toEqual(['Fallen', 'Reach', 'Blank'])
+  })
+
   it('shows the live ADP board position and blanks players off the board', () => {
     renderTable({
       picks: [],
@@ -287,6 +344,23 @@ describe('PlayerTable interactions', () => {
     expect(emptyCells?.[headers.findIndex((header) => /vs 7d/i.test(header))]?.textContent).toBe('—')
   })
 
+  it('keeps blank live ADP changes under the movers in either sort direction', async () => {
+    const user = userEvent.setup()
+    const rising = { ...players[1], fullName: 'Rising Back', searchRank: 2, liveAdpVsLastOne: 9.3 }
+    const falling = { ...players[2], fullName: 'Falling End', searchRank: 3, liveAdpVsLastOne: -5 }
+    const blank = { ...players[3], fullName: 'No Movement', searchRank: 4 }
+    expect([rising, blank, falling].sort((a, b) => comparePlayersBySort(a, b, 'liveAdp1d', 'desc', 2)).map((player) => player.fullName))
+      .toEqual(['Rising Back', 'Falling End', 'No Movement'])
+    expect([rising, blank, falling].sort((a, b) => comparePlayersBySort(a, b, 'liveAdp1d', 'asc', 2)).map((player) => player.fullName))
+      .toEqual(['Falling End', 'Rising Back', 'No Movement'])
+
+    renderTable({ picks: [], players: [blank, rising, falling] })
+    await user.click(screen.getByRole('button', { name: /vs 1d/i }))
+    await user.click(screen.getByRole('button', { name: /vs 1d/i }))
+    const names = screen.getAllByRole('row').slice(1).map((row) => within(row).getByText(/Back|End|Movement/).textContent)
+    expect(names.slice(0, 3)).toEqual(['Rising Back', 'Falling End', 'No Movement'])
+  })
+
   it('marks questionable in amber and IR in red', () => {
     renderTable({
       picks: [],
@@ -317,5 +391,53 @@ describe('PlayerTable interactions', () => {
     expect(cell).toHaveClass('cc-sos-easy')
     const emptyCell = screen.getByText('No Slate').closest('tr')?.querySelector('td .cc-sos-neutral')
     expect(emptyCell?.textContent).toBe('—')
+  })
+})
+
+describe('staged site pick', () => {
+  const staged = (over: Partial<React.ComponentProps<typeof PlayerTable>['pendingPick'] & object> = {}) => ({
+    playerId: players[0].id, pickNo: 2, round: 1, submitting: false, error: null,
+    onConfirm: vi.fn(), onCancel: vi.fn(), ...over,
+  })
+
+  // The confirmation used to be its own modal, which rendered behind the
+  // player sheet (.pd-backdrop z-index 110 vs .cc-modal-backdrop 100).
+  it('confirms inside the player sheet instead of a second dialog', async () => {
+    const pendingPick = staged()
+    renderTable({ selectedId: players[0].id, canDraft: true, canMutateDraft: true, pendingPick })
+    expect(await screen.findByText(/Send this pick to Sleeper\?/)).toBeInTheDocument()
+    expect(screen.getByText(/Round 1, pick 2/)).toBeInTheDocument()
+    // The normal actions are replaced, not stacked on top of.
+    expect(screen.queryByRole('button', { name: 'Draft player' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Full profile' })).not.toBeInTheDocument()
+  })
+
+  it('wires confirm and cancel', async () => {
+    const user = userEvent.setup()
+    const pendingPick = staged()
+    renderTable({ selectedId: players[0].id, canDraft: true, canMutateDraft: true, pendingPick })
+    await user.click(await screen.findByRole('button', { name: `Draft ${players[0].fullName}` }))
+    expect(pendingPick.onConfirm).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(pendingPick.onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('locks both buttons while the pick is in flight', async () => {
+    renderTable({ selectedId: players[0].id, canDraft: true, canMutateDraft: true, pendingPick: staged({ submitting: true }) })
+    expect(await screen.findByRole('button', { name: 'Sending…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+  })
+
+  it('shows a rejection without closing the sheet', async () => {
+    renderTable({ selectedId: players[0].id, canDraft: true, canMutateDraft: true, pendingPick: staged({ error: 'Not your pick.' }) })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Not your pick.')
+    expect(screen.getByRole('button', { name: `Draft ${players[0].fullName}` })).toBeEnabled()
+  })
+
+  // A pick staged for someone else must not hijack whichever player is open.
+  it('leaves the normal actions alone for a different player', async () => {
+    renderTable({ selectedId: players[1].id, canDraft: true, canMutateDraft: true, pendingPick: staged() })
+    expect(await screen.findByRole('button', { name: 'Draft player' })).toBeInTheDocument()
+    expect(screen.queryByText(/Send this pick to/)).not.toBeInTheDocument()
   })
 })

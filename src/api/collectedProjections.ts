@@ -125,20 +125,29 @@ export function mergeCollectedProjections(
   }
 
   for (const row of collected) {
-    const key = playerKey(row.name, row.team, row.position)
+    const incoming = seasonCollected(row)
+    if (!incoming) continue
+    const key = playerKey(incoming.name, incoming.team, incoming.position)
     const existing = (key ? byKey.get(key) : undefined)
-      ?? (row.espnId ? result.get(row.espnId) : undefined)
+      ?? (incoming.espnId ? result.get(incoming.espnId) : undefined)
     if (existing) {
-      const merged = blendWithSleeper(existing, row, recompute)
+      const merged = blendWithSleeper(existing, incoming, recompute)
       writeProjection(result, merged)
       if (key) byKey.set(key, merged)
       continue
     }
-    const created = collectedOnly(row, season, recompute)
+    const created = collectedOnly(incoming, season, recompute)
     writeProjection(result, created)
     if (key) byKey.set(key, created)
   }
   return result
+}
+
+function sleeperLooksOutlier(existing: PlayerProjection, incoming: CollectedProjection) {
+  const incomingPoints = volumeScore(incoming.stats)
+  const sleeperPoints = volumeScore(volumeOnly(existing.stats))
+  if (!(incomingPoints > 0 && sleeperPoints > 0)) return false
+  return sleeperPoints < incomingPoints * OUTLIER_LOW || sleeperPoints > incomingPoints * OUTLIER_HIGH
 }
 
 function blendWithSleeper(
@@ -148,10 +157,11 @@ function blendWithSleeper(
 ): PlayerProjection {
   const weight = Math.max(1, incoming.sourceCount || incoming.sourceIds.length || 1)
   const sleeperHasVolume = VOLUME_KEYS.some((key) => existing.stats[key] != null)
+    && !sleeperLooksOutlier(existing, incoming)
   const stats = sleeperHasVolume
     ? weightedStats(incoming.stats, weight, existing.stats)
     : incoming.stats
-  const sourceIds = incoming.sourceIds.includes('rotowire') || existing.source.toLowerCase().includes('rotowire')
+  const sourceIds = sleeperHasVolume && (incoming.sourceIds.includes('rotowire') || existing.source.toLowerCase().includes('rotowire'))
     ? unique([...incoming.sourceIds, 'rotowire'])
     : incoming.sourceIds
   const points = recompute(stats)
@@ -263,6 +273,124 @@ export function sourceLabel(sourceIds: string[]): string {
   if (names.length === 0) return 'Consensus'
   if (names.length === 1) return names[0] === 'RotoWire' ? 'RotoWire via Sleeper' : names[0]
   return `Consensus (${names.join(', ')})`
+}
+
+/**
+ * CBS `/season/` and FantasySharks' default Segment flip to Week 1 at
+ * kickoff. Sharks CSVs often omit G, so a 63-yard Gibbs line would survive
+ * a games-only check and halve VORP. Drop those samples and rebuild.
+ */
+export function isWeeklyProjection(row: { games?: number | null; stats?: Record<string, number> }): boolean {
+  if (row.games != null && row.games > 0 && row.games <= 3) return true
+  if (row.games != null && row.games > 3) return false
+  return looksWeeklyVolume(row.stats)
+}
+
+function looksWeeklyVolume(stats?: Record<string, number>) {
+  if (!stats) return false
+  const pass = stats.pass_yd
+  const rush = stats.rush_yd
+  const rec = stats.rec_yd
+  const fg = stats.fgm
+  const sacks = stats.sack
+  const allowed = stats.pts_allow
+  if (pass > 800 || rush > 300 || rec > 300 || fg > 10 || sacks > 15 || allowed > 80) return false
+  if (typeof pass === 'number' && pass > 0 && pass <= 500) return true
+  if (typeof rush === 'number' && rush > 0 && rush <= 180) return true
+  if (typeof rec === 'number' && rec > 0 && rec <= 180) return true
+  if (typeof fg === 'number' && fg > 0 && fg <= 6) return true
+  if (typeof sacks === 'number' && sacks > 0 && sacks <= 8) return true
+  if (typeof allowed === 'number' && allowed > 0 && allowed <= 50) return true
+  return false
+}
+
+const OUTLIER_LOW = 0.45
+const OUTLIER_HIGH = 2.2
+const OUTLIER_MIN_SOURCES = 3
+
+function volumeScore(stats?: Record<string, number>) {
+  if (!stats) return 0
+  return (stats.pass_yd ?? 0) * 0.04
+    + (stats.pass_td ?? 0) * 4
+    + (stats.pass_int ?? 0) * -1
+    + (stats.rush_yd ?? 0) * 0.1
+    + (stats.rush_td ?? 0) * 6
+    + (stats.rec ?? 0)
+    + (stats.rec_yd ?? 0) * 0.1
+    + (stats.rec_td ?? 0) * 6
+    + (stats.fgm ?? 0) * 3
+    + (stats.xpm ?? 0)
+    + (stats.sack ?? 0)
+    + (stats.int ?? 0) * 2
+    + (stats.fum_rec ?? 0) * 2
+    + (stats.def_td ?? 0) * 6
+    + (stats.safe ?? 0) * 2
+}
+
+function median(values: number[]) {
+  const amounts = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right)
+  if (!amounts.length) return null
+  const mid = Math.floor(amounts.length / 2)
+  return amounts.length % 2 ? amounts[mid]! : (amounts[mid - 1]! + amounts[mid]!) / 2
+}
+
+/** A source under half or over 2.2× the others' median is treated as tainted. */
+export function rejectOutlierSamples<T extends { stats: Record<string, number> }>(samples: T[]): T[] {
+  const rows = samples.filter((sample) => VOLUME_KEYS.some((key) => sample.stats[key] != null))
+  if (rows.length < OUTLIER_MIN_SOURCES) return rows
+  const scored = rows.map((sample) => ({ sample, points: volumeScore(sample.stats) }))
+  const mid = median(scored.map((row) => row.points))
+  if (!(mid != null && mid > 0)) return rows
+  const kept = scored
+    .filter((row) => row.points >= mid * OUTLIER_LOW && row.points <= mid * OUTLIER_HIGH)
+    .map((row) => row.sample)
+  return kept.length >= 2 ? kept : rows
+}
+
+function rebuildFromSamples(row: CollectedProjection, samples: CollectedProjection['sources']): CollectedProjection | null {
+  if (!samples.length) return null
+  const stats = averageVolume(samples.map((sample) => sample.stats))
+  if (!VOLUME_KEYS.some((key) => stats[key] != null)) return null
+  const games = samples
+    .map((sample) => sample.games)
+    .filter((value): value is number => value != null && value > 3)
+  return {
+    ...row,
+    stats,
+    games: games.length ? games.reduce((sum, value) => sum + value, 0) / games.length : row.games,
+    sources: samples,
+    sourceIds: samples.map((sample) => sample.id),
+    sourceCount: samples.length,
+  }
+}
+
+function seasonCollected(row: CollectedProjection): CollectedProjection | null {
+  const seasonal = row.sources.filter((sample) => !isWeeklyProjection(sample))
+  const samples = rejectOutlierSamples(seasonal)
+  if (samples.length !== row.sources.length) {
+    if (!samples.length) return isWeeklyProjection(row) ? null : row
+    return rebuildFromSamples(row, samples)
+  }
+  if (isWeeklyProjection(row) && !samples.length) return null
+  return row
+}
+
+function averageVolume(rows: Array<Record<string, number>>) {
+  const sums: Record<string, number> = {}
+  const counts: Record<string, number> = {}
+  for (const stats of rows) {
+    for (const key of VOLUME_KEYS) {
+      const amount = stats[key]
+      if (typeof amount !== 'number' || !Number.isFinite(amount)) continue
+      sums[key] = (sums[key] ?? 0) + amount
+      counts[key] = (counts[key] ?? 0) + 1
+    }
+  }
+  const averaged: Record<string, number> = {}
+  for (const key of VOLUME_KEYS) {
+    if (counts[key]) averaged[key] = sums[key]! / counts[key]!
+  }
+  return averaged
 }
 
 function unique(values: string[]) {

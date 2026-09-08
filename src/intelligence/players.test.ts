@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Player } from '../providers/types'
-import { applyScheduleByes, attachPlayoffSos, enrichPlayersWithDirectory } from './players'
+import { applyScheduleByes, attachPlayerRisk, attachPlayoffSos, attachProjectedPoints, enrichPlayersWithDirectory } from './players'
 import type { ScheduleModel, ScheduleWeek } from './calculations/matchup'
 
 const week = (week: number, opponent: string | null): ScheduleWeek => ({
@@ -175,9 +175,80 @@ describe('playoff strength of schedule', () => {
     expect(result[0]?.playoffSos).toEqual({ averageMatchupRank: 4, rank: 1, games: 3 })
   })
 
+  it('does not attach leftover projections to an unsigned free agent', () => {
+    const result = attachProjectedPoints(
+      [player({ id: 'fa', sleeperId: 's1', team: null }), player({ id: 'chi', sleeperId: 's2', team: 'CHI' })],
+      [
+        { gsisId: null, espnId: null, sleeperId: 's1', name: 'Real Player', position: 'RB', points: 280 },
+        { gsisId: null, espnId: null, sleeperId: 's2', name: 'Real Player', position: 'RB', points: 160 },
+      ],
+    )
+    expect(result[0]?.projectedPoints).toBeUndefined()
+    expect(result[1]?.projectedPoints).toBe(160)
+  })
+
   it('passes the pool through untouched without a model or a week window', () => {
     const pool = [player({ id: 'chi', team: 'CHI' })]
     expect(attachPlayoffSos(pool, null, 'ppr', weeks)).toBe(pool)
     expect(attachPlayoffSos(pool, playoffModel, 'ppr', null)).toBe(pool)
+  })
+})
+
+describe('attachPlayerRisk', () => {
+  const availability = { projectedAvailability: 0.82, gamesMissed: 14, seasons: 3 }
+  const consistency = { cv: 0.326, weeks: 17 }
+  const risk = { availability, consistency }
+  const player = (overrides: Partial<Player>): Player => ({
+    id: 'cmc', firstName: 'Christian', lastName: 'McCaffrey', fullName: 'Christian McCaffrey',
+    position: 'RB', team: 'SF', searchRank: 5, injuryStatus: null, number: null,
+    yearsExp: 9, bye: null, ...overrides,
+  })
+  const index = {
+    byGsis: new Map([['00-0033280', risk]]),
+    byEspn: new Map([['3117251', risk]]),
+    bySleeper: new Map([['4034', risk]]),
+    byNamePos: new Map([['christian mccaffrey|RB', risk]]),
+    generatedAt: 'now',
+  }
+
+  it('matches on any id the board happens to carry', () => {
+    for (const ids of [{ gsisId: '00-0033280' }, { espnId: '3117251' }, { sleeperId: '4034' }]) {
+      expect(attachPlayerRisk([player(ids)], index)[0]?.availability).toEqual(availability)
+    }
+  })
+
+  it('falls back to name and position when no id lines up', () => {
+    expect(attachPlayerRisk([player({})], index)[0]?.availability).toEqual(availability)
+  })
+
+  it('fills a blank ESPN id from the shard row so news and the ADP graph can key on it', () => {
+    const indexWithIds = {
+      ...index,
+      bySleeper: new Map([['9224', {
+        availability: { ...availability, espnId: '4429795', sleeperId: '9224', gsisId: '00-0039139' },
+        consistency,
+      }]]),
+    }
+    const result = attachPlayerRisk([player({ sleeperId: '9224' })], indexWithIds)[0]
+    expect(result?.espnId).toBe('4429795')
+    expect(result?.gsisId).toBe('00-0039139')
+    expect(result?.availability).toEqual(availability)
+  })
+
+  it('leaves a player with no entry unmarked rather than average', () => {
+    // Unknown is not the same claim as durable, and only the engine can tell
+    // them apart if this abstains instead of filling in a default.
+    const rookie = player({ fullName: 'Some Rookie', firstName: 'Some', lastName: 'Rookie' })
+    expect(attachPlayerRisk([rookie], index)[0]?.availability).toBeUndefined()
+  })
+
+  it('is a no-op when the published index predates the field', () => {
+    const players = [player({ gsisId: '00-0033280' })]
+    expect(attachPlayerRisk(players, null)).toBe(players)
+  })
+
+  it('carries weekly consistency alongside availability', () => {
+    const attached = attachPlayerRisk([player({ gsisId: '00-0033280' })], index)[0]!
+    expect(attached.consistency).toEqual(consistency)
   })
 })

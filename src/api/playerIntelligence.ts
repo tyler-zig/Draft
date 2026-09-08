@@ -1,4 +1,5 @@
 import type { Player } from '../providers/types'
+import { normalizeName, normalizePos, normalizeTeam } from '../rankings/normalize'
 import { getPlayerHistoricalIntelligence, type HistoricalPlayerIntelligence } from './playerHistorical'
 import { readRankingArtifact } from '../supabase/artifacts'
 
@@ -267,9 +268,17 @@ export async function getPlayerNews(
   }
 }
 
-const normalizedName = (value: string) => value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, ' ')
-const namePosKey = (name: string, position: string) => `${normalizedName(name)}|${position}`
-const namePosTeamKey = (name: string, position: string, team: string) => `${namePosKey(name, position)}|${team}`
+const namePosKey = (name: string, position: string) => `${normalizeName(name)}|${normalizePos(position) ?? position}`
+const namePosTeamKey = (name: string, position: string, team: string) => `${namePosKey(name, position)}|${normalizeTeam(team) ?? team}`
+
+/** nflverse often has the ESPN id Sleeper left blank. News and the ADP graph both key on it. */
+export function withResolvedEspnId<T extends Pick<Player, 'espnId'>>(
+  player: T,
+  historical?: Pick<HistoricalPlayerIntelligence, 'espnId'> | null,
+): T {
+  const espnId = player.espnId || historical?.espnId || undefined
+  return espnId && espnId !== player.espnId ? { ...player, espnId } : player
+}
 
 function parseHistoryPoints(value: unknown): PlayerMarketHistoryPoint[] {
   if (!Array.isArray(value)) return []
@@ -354,11 +363,20 @@ export async function getPlayerIntelligence(
   player: Player,
   signal?: AbortSignal,
 ): Promise<PlayerIntelligenceData> {
+  const historicalPromise = getPlayerHistoricalIntelligence(player, signal)
+  // News, ESPN stats, and the ADP graph all key on espnId. Wait for nflverse
+  // only when Sleeper (or the host league) left it blank -- Gibbs and Bijan
+  // have been showing up that way, which blanked headlines and live-ADP history.
+  let resolved = player
+  if (!player.espnId && player.position !== 'DEF') {
+    resolved = withResolvedEspnId(player, await historicalPromise)
+  }
+
   const stats: PlayerStat[] = []
   let statsMessage: string | null = null
 
-  const espnId = player.espnId
-  if (espnId && player.position !== 'DEF') {
+  const espnId = resolved.espnId
+  if (espnId && resolved.position !== 'DEF') {
     try {
       const statsJson = await fetchJson(
         `https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/${encodeURIComponent(espnId)}/stats?region=us&lang=en&contentorigin=espn`,
@@ -371,16 +389,15 @@ export async function getPlayerIntelligence(
       statsMessage = 'Current-season statistics are temporarily unavailable.'
     }
   } else {
-    statsMessage = player.position === 'DEF'
+    statsMessage = resolved.position === 'DEF'
       ? 'Individual statistics are not available for team defenses.'
       : 'This player is not linked to an ESPN profile.'
   }
 
-  const { news, newsMessage } = await getPlayerNews(player, signal)
-
-  const [marketHistory, historical] = await Promise.all([
-    getPlayerMarketHistory(player, signal),
-    getPlayerHistoricalIntelligence(player, signal),
+  const [{ news, newsMessage }, marketHistory, historical] = await Promise.all([
+    getPlayerNews(resolved, signal),
+    getPlayerMarketHistory(resolved, signal),
+    historicalPromise,
   ])
   return { stats, news, statsMessage, newsMessage, marketHistory, historical }
 }

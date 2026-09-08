@@ -120,14 +120,15 @@ the standalone ADP cron job and the broad snapshot can move independently.
 
 `npm run scrape:projections` collects public season-long stat lines from CBS,
 ESPN, and FantasySharks, averages each stat across the sources that published
-it, and writes `data/projections/latest.json` plus a `public/projections/`
-copy. The app blends that consensus with the live Sleeper/RotoWire board and
-scores the result to the connected league, which is what VORP reads.
+it, drops a source whose volume is way off the others, and writes
+`data/projections/latest.json` plus a `public/projections/` copy. The app
+blends that consensus with the live Sleeper/RotoWire board and scores the
+result to the connected league, which is what VORP reads.
 
 | Source | What it gives | Volume |
 | --- | --- | --- |
-| FantasySharks | Position CSVs with stable player ids | ~580 rows over QB/RB/WR/TE/K/DEF |
-| CBS Sports | Server-rendered PPR tables (volume is the same as standard) | ~450 rows over six positions |
+| FantasySharks | Position CSVs pinned to the season Segment (the default URL is Week 1 after kickoff) | ~580 rows over QB/RB/WR/TE/K/DEF |
+| CBS Sports | Rest-of-season PPR tables (the `/season/` slug is Week 1 after kickoff) | ~450 rows over six positions |
 | ESPN | Default-league `kona_player_info` season totals, keyed by ESPN id | ~800 rows with season projections |
 
 There is no login or paywall bypass. FantasySharks publishes `Crawl-delay: 60`,

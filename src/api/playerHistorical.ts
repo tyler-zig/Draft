@@ -2,6 +2,8 @@ import type { Player, ScoringType } from '../providers/types'
 import { fetchArtifact } from '../supabase/artifacts'
 import { matchupScoringFor, resolvePlayerSchedule, type PlayerScheduleView, type ScheduleModel, type ScheduleWeek } from '../intelligence/calculations/matchup'
 import { SHARD_INDEX_PATH, normalizedPlayerName, shardPath } from '../intelligence/shards'
+import { estimateAvailability, seasonsFromTriples, type AvailabilityEstimate } from '../draft/availability'
+import { consistencyFromPair, type Consistency } from '../draft/consistency'
 
 export interface HistoricalWeek {
   week: number
@@ -47,6 +49,21 @@ export interface HistoricalSeason {
     missedWeeks: number[]
     byStatus: Record<string, number>
   }
+}
+
+/** What the index knows about a player's risk, as opposed to his projection. */
+export interface PlayerRisk {
+  availability: AvailabilityEstimate | null
+  consistency: Consistency | null
+}
+
+export interface PlayerRiskIndex {
+  byGsis: Map<string, PlayerRisk>
+  byEspn: Map<string, PlayerRisk>
+  bySleeper: Map<string, PlayerRisk>
+  /** `normalizedName|POS`, for players whose provider ids do not line up. */
+  byNamePos: Map<string, PlayerRisk>
+  generatedAt: string
 }
 
 export interface HistoricalPlayerIntelligence {
@@ -102,6 +119,10 @@ interface ShardIndexEntry {
   n: string
   p: string
   d: number
+  /** `[season, played, missed, ...]`, most recent first. See `_shared/shards.ts`. */
+  a?: number[]
+  /** `[coefficient of variation, weeks]` of weekly scoring. */
+  c?: [number, number]
 }
 interface ShardIndex {
   attribution: string
@@ -241,6 +262,61 @@ function loadShardIndex(): Promise<ShardIndex | null> {
     return null
   })
   return shardIndexPromise
+}
+
+/**
+ * Every player's risk profile -- availability and weekly consistency -- keyed
+ * by each id the board might hold.
+ *
+ * The draft engine has to price a whole pool at once, which the sharded read
+ * path below cannot serve -- resolving 500 players would mean fetching all 128
+ * buckets, the exact download the sharding exists to avoid. So the small
+ * identity index carries the games-missed window itself, and this reads it in
+ * one request.
+ *
+ * Null rather than empty on failure or on an index published before the field
+ * existed, so a caller can tell "no durability data" from "nobody has missed a
+ * game" -- scoring the second when the first is true would quietly reward
+ * every player equally for a record we never read.
+ */
+export async function getPlayerRiskIndex(
+  signal?: AbortSignal,
+): Promise<PlayerRiskIndex | null> {
+  try {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    const index = await loadShardIndex()
+    if (!index) return null
+    const byGsis = new Map<string, PlayerRisk>()
+    const byEspn = new Map<string, PlayerRisk>()
+    const bySleeper = new Map<string, PlayerRisk>()
+    const byNamePos = new Map<string, PlayerRisk>()
+    for (const entry of index.byGsis.values()) {
+      const estimate = estimateAvailability(seasonsFromTriples(entry.a))
+      const consistency = consistencyFromPair(entry.c)
+      // A player with neither reading is one there is nothing extra to say
+      // about, so he is left out rather than stored as a pair of nulls.
+      if (!estimate && !consistency) continue
+      const risk: PlayerRisk = {
+        availability: estimate && {
+          ...estimate,
+          espnId: entry.e || null,
+          sleeperId: entry.s || null,
+          gsisId: entry.g,
+        },
+        consistency,
+      }
+      byGsis.set(entry.g, risk)
+      if (entry.e) byEspn.set(entry.e, risk)
+      if (entry.s) bySleeper.set(entry.s, risk)
+      const key = `${entry.n}|${entry.p}`
+      if (!byNamePos.has(key)) byNamePos.set(key, risk)
+    }
+    if (!byGsis.size) return null
+    return { byGsis, byEspn, bySleeper, byNamePos, generatedAt: index.generatedAt }
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return null
+  }
 }
 
 /** One bucket of full records, keyed by gsis id. Memoized per shard. */

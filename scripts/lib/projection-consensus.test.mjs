@@ -47,6 +47,58 @@ describe('mergeProjectionSets', () => {
     ]))
   })
 
+  it('drops a weekly CBS line so it cannot pull season volume down', () => {
+    const [player] = mergeProjectionSets([
+      sharks,
+      {
+        id: 'cbs-rb',
+        sourceId: 'cbs',
+        rows: [{
+          name: 'Jahmyr Gibbs', team: 'DET', position: 'RB',
+          games: 1, stats: { rush_yd: 94, rec: 4.5, rec_yd: 39 },
+        }],
+      },
+      espn,
+    ])
+    expect(player.sourceIds).toEqual(expect.arrayContaining(['fantasysharks', 'espn']))
+    expect(player.sourceIds).not.toContain('cbs')
+    expect(player.stats.rush_yd).toBeCloseTo((1300 + 1372) / 2)
+  })
+
+  it('drops a FantasySharks week-1 line that has no games column', () => {
+    const [player] = mergeProjectionSets([
+      {
+        id: 'fantasysharks-rb',
+        sourceId: 'fantasysharks',
+        rows: [{
+          name: 'Jahmyr Gibbs', team: 'DET', position: 'RB',
+          stats: { rush_yd: 63, rec: 3.3, rec_yd: 31 },
+        }],
+      },
+      espn,
+    ])
+    expect(player.sourceIds).toEqual(['espn'])
+    expect(player.stats.rush_yd).toBe(1372)
+  })
+
+  it('drops a source whose volume is way off the others even when games look seasonal', () => {
+    const [player] = mergeProjectionSets([
+      sharks,
+      espn,
+      {
+        id: 'cbs-rb',
+        sourceId: 'cbs',
+        rows: [{
+          name: 'Jahmyr Gibbs', team: 'DET', position: 'RB',
+          games: 17, stats: { rush_yd: 90, rec: 4, rec_yd: 30 },
+        }],
+      },
+    ])
+    expect(player.sourceIds).toEqual(expect.arrayContaining(['fantasysharks', 'espn']))
+    expect(player.sourceIds).not.toContain('cbs')
+    expect(player.stats.rush_yd).toBeCloseTo((1300 + 1372) / 2)
+  })
+
   it('does not invent a second player when only the team defense name differs', () => {
     const merged = mergeProjectionSets([
       { sourceId: 'cbs', rows: [{ name: 'SEA D/ST', team: 'SEA', position: 'DEF', stats: { sack: 40 } }] },

@@ -1,6 +1,8 @@
 import type { Player, PlayoffWeeks } from '../providers/types'
+import { isUnsignedFreeAgent } from '../draft/freeAgents'
 import { normalizeName, normalizePos, normalizeTeam } from '../rankings/normalize'
-import type { ProjectedPointsEntry } from '../api/playerHistorical'
+import type { PlayerRiskIndex, ProjectedPointsEntry } from '../api/playerHistorical'
+import { normalizedPlayerName } from './shards'
 import {
   byeWeekFromSchedule,
   matchupScoringFor,
@@ -71,6 +73,43 @@ export function enrichPlayersWithDirectory(players: Player[], directory: Player[
       gsisId: profile.gsisId ?? player.gsisId,
       sportradarId: profile.sportradarId ?? player.sportradarId,
       fantasyDataId: profile.fantasyDataId ?? player.fantasyDataId,
+    }
+  })
+}
+
+/**
+ * Stamp each player's risk profile -- games-missed history and weekly scoring
+ * consistency -- from the intelligence shard index.
+ *
+ * Matched on the same id ladder the rest of this module uses, ending at
+ * normalized name + position -- a player whose gsis id never reached the board
+ * still has an injury history worth pricing. A player with no entry keeps
+ * `availability` undefined rather than picking up an average one: the engine
+ * treats that as unknown and applies no term, which is the correct behaviour
+ * for a rookie and for a stale published index alike.
+ *
+ * The same row also fills a blank ESPN / Sleeper / gsis id. News and the ADP
+ * graph both key on ESPN id, and Sleeper has been omitting it for some stars.
+ */
+export function attachPlayerRisk(
+  players: Player[],
+  index: PlayerRiskIndex | null | undefined,
+): Player[] {
+  if (!index) return players
+  return players.map((player) => {
+    const risk = (player.gsisId ? index.byGsis.get(player.gsisId) : undefined)
+      ?? (player.espnId ? index.byEspn.get(player.espnId) : undefined)
+      ?? (player.sleeperId ? index.bySleeper.get(player.sleeperId) : undefined)
+      ?? index.byNamePos.get(`${normalizedPlayerName(player.fullName)}|${player.position}`)
+    if (!risk) return player
+    const { espnId, sleeperId, gsisId, ...availability } = risk.availability ?? {}
+    return {
+      ...player,
+      availability: risk.availability ? (availability as Player['availability']) : null,
+      consistency: risk.consistency,
+      espnId: player.espnId ?? espnId ?? undefined,
+      sleeperId: player.sleeperId ?? sleeperId ?? undefined,
+      gsisId: player.gsisId ?? gsisId ?? undefined,
     }
   })
 }
@@ -171,6 +210,7 @@ export function attachProjectedPoints(players: Player[], pool: ProjectedPointsEn
   }
 
   return players.map((player) => {
+    if (isUnsignedFreeAgent(player)) return player
     const entry =
       (player.gsisId ? byGsis.get(player.gsisId) : undefined) ??
       (player.espnId ? byEspn.get(player.espnId) : undefined) ??

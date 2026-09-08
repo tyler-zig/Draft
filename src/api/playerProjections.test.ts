@@ -131,11 +131,19 @@ describe('attachProjectedAdp', () => {
   it('fills a blank ADP and leaves a ranking-set ADP alone', () => {
     const map = new Map([['one', projection()]])
     const filled = attachProjectedAdp([
-      { id: 'one', sleeperId: 'one' },
-      { id: 'kept', sleeperId: 'one', adp: 3.2 },
+      { id: 'one', sleeperId: 'one', team: 'SF', position: 'RB' },
+      { id: 'kept', sleeperId: 'one', team: 'SF', position: 'RB', adp: 3.2 },
     ] as Player[], map, 'ppr')
     expect(filled[0]?.adp).toBe(8.4)
     expect(filled[1]?.adp).toBe(3.2)
+  })
+
+  it('does not fill leftover ADP for an unsigned free agent', () => {
+    const map = new Map([['one', projection()]])
+    const filled = attachProjectedAdp([
+      { id: 'one', sleeperId: 'one', team: 'FA', position: 'WR' },
+    ] as Player[], map, 'ppr')
+    expect(filled[0]?.adp).toBeUndefined()
   })
 })
 

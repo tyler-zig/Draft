@@ -148,6 +148,19 @@ describe('live ADP snapshot', () => {
     })
   })
 
+  it('does not attach leftover live ADP to an unsigned free agent', () => {
+    const unsigned: Player = {
+      ...players[0]!,
+      id: 'fa',
+      team: null,
+      espnId: '4034',
+    }
+    const result = applyLiveAdp([unsigned], snapshot([
+      { name: 'Christian McCaffrey', team: 'SF', position: 'RB', adp: 1.4, espnId: '4034' },
+    ]))
+    expect(result[0]?.liveAdp).toBeUndefined()
+  })
+
   it('leaves the roster untouched without a snapshot', () => {
     expect(applyLiveAdp(players, null)).toBe(players)
     expect(applyLiveAdp(players, undefined)).toBe(players)

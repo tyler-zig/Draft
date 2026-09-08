@@ -48,7 +48,7 @@ export const TABLE_COLUMNS: Array<{ key: TableColumnKey; label: string; required
   {
     key: 'value',
     label: 'Value',
-    hint: 'Current pick minus ADP. Positive means the player has fallen past his market slot; negative means you would be reaching.',
+    hint: 'Current pick minus live ADP (season ADP only if the live board has no row). Positive means the player has fallen past his market slot; negative means you would be reaching.',
   },
   {
     key: 'sos',

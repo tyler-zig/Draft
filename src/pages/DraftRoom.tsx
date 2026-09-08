@@ -13,6 +13,9 @@ import { draftFrontier, normalizePickSlots } from '../draft/pickSlots'
 import { clearMockLeagueSeed, loadMockLeagueSeed, mockTemplateFrom, saveMockLeagueSeed } from '../draft/mockLeague'
 import { playerDraftContext } from '../draft/playerContext'
 import { clearCurrentDraft, playerIntelligenceHrefForSession, saveCurrentDraft } from '../draft/currentDraft'
+import type { PendingPickConfirm } from '../components/PlayerDetail'
+import { PanelResizeHandles } from '../components/PanelResizeHandles'
+import { usePanelLayout } from '../hooks/usePanelLayout'
 import { PlayerTable, isBoardPositionFilter, type PositionFilter } from '../components/PlayerTable'
 import { DraftBoard } from '../components/DraftBoard'
 import { TeamLogo } from '../components/TeamLogo'
@@ -42,10 +45,10 @@ import { sleeperProvider } from '../providers/sleeperProvider'
 import { DEFAULT_PLAYOFF_WEEKS } from '../providers/types'
 import type { DraftPick, DraftSession, KeeperEntry, Player, ScoringType } from '../providers/types'
 import type { RankSet } from '../rankings/types'
-import { CHOPPED_EARLY_WEEKS } from '../draft/chopped'
-import { attachPlayoffSos, attachProjectedPoints, applyScheduleByes, enrichPlayersWithDirectory } from '../intelligence/players'
+import { choppedSosWeeks } from '../draft/chopped'
+import { attachPlayerRisk, attachPlayoffSos, attachProjectedPoints, applyScheduleByes, enrichPlayersWithDirectory } from '../intelligence/players'
 import { attachProjectedAdp, getNflProjections, projectionPointsPool, projectionSeason } from '../api/playerProjections'
-import { getPublishedSchedule, getPublishedScheduleModel } from '../api/playerHistorical'
+import { getPlayerRiskIndex, getPublishedSchedule, getPublishedScheduleModel } from '../api/playerHistorical'
 import { withVorp } from '../draft/vorp'
 import { AccountButton } from '../components/AccountButton'
 import './command-center.css'
@@ -270,17 +273,26 @@ export function DraftRoom() {
   const scheduleQuery = useQuery({ queryKey: ['published-schedule'], queryFn: ({ signal }) => getPublishedSchedule(signal), staleTime: 86_400_000 })
   // Same artifact, different slice: the full matchup model for room-wide playoff SoS.
   const scheduleModelQuery = useQuery({ queryKey: ['published-schedule-model'], queryFn: ({ signal }) => getPublishedScheduleModel(signal), staleTime: 86_400_000 })
+  // Games-missed history and weekly scoring consistency for the whole pool,
+  // out of the intelligence shard index. Republished on the same cadence as
+  // the rest of that artifact, so it caches for a day like its siblings.
+  const playerRiskQuery = useQuery({ queryKey: ['player-risk'], queryFn: ({ signal }) => getPlayerRiskIndex(signal), staleTime: 86_400_000 })
   const liveAdpSnapshotQuery = useQuery(liveAdpQuery)
   const playoffWeeks = session?.leagueFormat === 'chopped'
     ? null
     : (session?.playoffWeeks ?? DEFAULT_PLAYOFF_WEEKS)
+  // Chopped has no playoffs; the window that matters is the stretch an average
+  // team is likely to still be alive for, which scales with the league.
   const sosWeeks = session?.leagueFormat === 'chopped'
-    ? CHOPPED_EARLY_WEEKS
+    ? choppedSosWeeks(session.teams)
     : playoffWeeks
   const intelligencePlayers = useMemo(() => {
     const enriched = applyScheduleByes(enrichPlayersWithDirectory(players, sleeperPlayers), scheduleQuery.data)
-    return attachPlayoffSos(enriched, scheduleModelQuery.data, session?.scoringType, sosWeeks)
-  }, [players, sleeperPlayers, scheduleQuery.data, scheduleModelQuery.data, session?.scoringType, sosWeeks])
+    const withSos = attachPlayoffSos(enriched, scheduleModelQuery.data, session?.scoringType, sosWeeks)
+    // After the directory pass, which is what fills in the gsis and Sleeper
+    // ids the availability index is keyed on.
+    return attachPlayerRisk(withSos, playerRiskQuery.data)
+  }, [players, sleeperPlayers, scheduleQuery.data, scheduleModelQuery.data, playerRiskQuery.data, session?.scoringType, sosWeeks])
   const rankedPlayers = useMemo(() => applyConsensusRanks(intelligencePlayers, [...builtinSets, ...importedSets], rankSettings.enabledIds, rankSettings.method, session?.scoringType), [intelligencePlayers, builtinSets, importedSets, rankSettings, session?.scoringType])
   // RotoWire season projections via Sleeper, scored to the league's format, so
   // VORP can rank the pool by forecasted value. Players with no published row
@@ -527,7 +539,17 @@ export function DraftRoom() {
   // be clicked any time, a real pick only on the clock.
   const writesToSite = providerId !== 'demo' && typeof provider.makePick === 'function'
   const canDraft = writesToSite ? youAreOnClock : canMutateDraft && youAreOnClock
-  const pendingPlayer = pendingPick ? playersById.get(pendingPick.playerId) ?? null : null
+  const pendingPickConfirm: PendingPickConfirm | null = pendingPick
+    ? {
+        playerId: pendingPick.playerId,
+        pickNo: pendingPick.pickNo,
+        round: currentLocation.round,
+        submitting: submittingPick,
+        error: pickError,
+        onConfirm: () => { void confirmSitePick() },
+        onCancel: () => { setPendingPick(null); setPickError(null) },
+      }
+    : null
 
   /**
    * Stages a site pick. Every guard is re-checked on confirm as well: the
@@ -537,6 +559,11 @@ export function DraftRoom() {
   const requestSitePick = (playerId: string) => {
     setPickError(null)
     setPendingPick({ playerId, pickNo: currentPickNo })
+    // The confirmation lives in the detail sheet, and the table also drafts on
+    // double-click -- which does not open it. Selecting the player here means
+    // the confirm is on screen however the pick was staged, rather than a
+    // double-click quietly staging something the user never sees.
+    setSelectedPlayerId(playerId)
   }
 
   const confirmSitePick = async () => {
@@ -697,13 +724,19 @@ export function DraftRoom() {
     <div className="cc-workspace">
       <aside className="cc-left">
         <section className="cc-section"><div className="cc-section-head"><div className="cc-eyebrow">Roster</div><div className="cc-count">{draftedCount}/{roster.length}</div></div><div className="cc-col-head"><span>Pos</span><span>Player</span><span>Bye</span></div>
-          {roster.map((slot, index) => <div className={`cc-roster-row ${slot.key === 'BN' && (index === 0 || roster[index - 1]?.key !== 'BN') ? 'cc-bench-start' : ''}`} key={`${slot.key}-${index}`}><span className="cc-slot">{slot.label.replace(/\d$/, '')}</span>{slot.player ? <span className="cc-who"><PlayerPhoto player={slot.player} /><span>{slot.player.fullName}</span></span> : <span className="cc-empty">Empty</span>}<span className="cc-bye">{slot.player?.bye ?? '—'}</span></div>)}
+          {roster.map((slot, index) => {
+            const className = `cc-roster-row${slot.key === 'BN' && (index === 0 || roster[index - 1]?.key !== 'BN') ? ' cc-bench-start' : ''}${slot.player && selectedPlayerId === slot.player.id ? ' cc-roster-on' : ''}`
+            const body = <><span className="cc-slot">{slot.label.replace(/\d$/, '')}</span>{slot.player ? <span className="cc-who"><PlayerPhoto player={slot.player} /><span>{slot.player.fullName}</span></span> : <span className="cc-empty">Empty</span>}<span className="cc-bye">{slot.player?.bye ?? '—'}</span></>
+            return slot.player
+              ? <button type="button" className={className} key={`${slot.key}-${index}`} onClick={() => setSelectedPlayerId(slot.player!.id)}>{body}</button>
+              : <div className={className} key={`${slot.key}-${index}`}>{body}</div>
+          })}
         </section>
         <section className="cc-section"><div className="cc-section-head"><div className="cc-eyebrow">Roster needs</div></div>{needRows.map((need) => <div className="cc-need-row" key={need.position}><b>{need.position}</b><span className={`cc-need-bar cc-${need.tone}`}>{need.tone === 'high' ? 'High Need' : need.tone === 'med' ? 'Medium Need' : 'Low Need'}</span><span className="cc-starters">{need.label}</span></div>)}</section>
         <section className="cc-section" aria-label="Roster summary"><div className="cc-section-mode" role="tablist" aria-label="Summary view"><button type="button" role="tab" aria-selected={summaryView === 'positions'} className={summaryView === 'positions' ? 'active' : ''} onClick={() => setSummaryView('positions')}>Positions</button><button type="button" role="tab" aria-selected={summaryView === 'byes'} className={summaryView === 'byes' ? 'active' : ''} onClick={() => setSummaryView('byes')}>Byes</button></div>{summaryView === 'positions' ? <div className="cc-position-summary">{summaryRows.map((row) => <div key={row.key}>{isBoardPositionFilter(row.key) ? <button type="button" className={positionFilter === row.key ? 'cc-pos-filter active' : 'cc-pos-filter'} aria-pressed={positionFilter === row.key} aria-label={positionFilter === row.key ? `Clear ${row.label} filter` : `Filter board to ${row.label}`} onClick={() => filterByPosition(row.key)}>{row.label}</button> : <span>{row.label}</span>}<div><i style={{ width: `${row.total ? row.filled / row.total * 100 : 0}%` }} /></div><b>{row.filled}/{row.total}</b><small>{row.open ? `${row.open} open` : 'Filled'}</small></div>)}</div> : byeRows.length ? <div className="cc-position-summary cc-bye-summary">{byeRows.map((row) => <div key={row.week} className={row.stacked ? 'cc-bye-stack' : undefined}><span>WK {row.week}</span><div><i style={{ width: `${byeTotal ? row.count / byeTotal * 100 : 0}%` }} /></div><b>{row.count}</b><small>{formatByePositions(row.byPosition)}</small></div>)}</div> : <p className="cc-summary-empty">No rostered players have a bye week yet.</p>}</section>
       </aside>
 
-      <PlayerTable players={valuedPlayers} picks={picks} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={provider.label} currentPickNo={currentPickNo} queuedIds={activeQueue} selectedId={selectedPlayerId} selectedContext={selectedContext} scoringType={session.scoringType} playoffWeeks={playoffWeeks} visibleColumnKeys={visibleColumns} onVisibleColumnKeysChange={updateColumns} onSelect={setSelectedPlayerId} onDraft={writesToSite ? (canDraft ? requestSitePick : undefined) : canMutateDraft ? (id) => { demoPick(id, players, keptIds); setSelectedPlayerId(null); void refetchPicks() } : undefined} onToggleQueue={toggleQueue} positionFilter={positionFilter} onPositionFilterChange={setPositionFilter} />
+      <PlayerTable players={valuedPlayers} picks={picks} canDraft={canDraft} canMutateDraft={canMutateDraft} providerLabel={provider.label} currentPickNo={currentPickNo} queuedIds={activeQueue} selectedId={selectedPlayerId} selectedContext={selectedContext} scoringType={session.scoringType} playoffWeeks={playoffWeeks} visibleColumnKeys={visibleColumns} onVisibleColumnKeysChange={updateColumns} pendingPick={pendingPickConfirm} onSelect={setSelectedPlayerId} onDraft={writesToSite ? (canDraft ? requestSitePick : undefined) : canMutateDraft ? (id) => { demoPick(id, players, keptIds); setSelectedPlayerId(null); void refetchPicks() } : undefined} onToggleQueue={toggleQueue} positionFilter={positionFilter} onPositionFilterChange={setPositionFilter} />
 
       <aside className="cc-right">
         <BestAvailable recs={recs} currentPickNo={currentPickNo} targetPickNo={yourNextPickNo} onSelect={setSelectedPlayerId} />
@@ -715,25 +748,10 @@ export function DraftRoom() {
     <footer className="cc-footer">{sleeperPickNote ? <div className="cc-room-note" role="status">{sleeperPickNote}</div> : null}<div className="cc-footer-head"><div className="cc-eyebrow">Draft board</div><div className="cc-round-tabs" role="tablist" aria-label="Draft round">{Array.from({ length: session.rounds }, (_, index) => index + 1).map((round) => <button type="button" role="tab" key={round} className={`${viewedRound === round ? 'on' : ''} ${round === currentLocation.round ? 'live' : ''}`} aria-selected={viewedRound === round} aria-label={round === currentLocation.round ? `Round ${round}, current` : `Round ${round}`} onClick={() => setBoardRound(round === currentLocation.round ? null : round)}>{round}</button>)}</div><button type="button" className="cc-board-all" onClick={() => setFullBoardOpen(true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>View full board</button></div><div className="cc-picks" style={{ gridTemplateColumns: `repeat(${session.teams}, minmax(0, 1fr))` }}>{boardPicks.map((pickNo) => { const made = picks.find((pick) => pick.pickNo === pickNo); const loc = ownerSlotForPick(pickNo, session.teams, session.type, session.pickOwners); const owner = session.order.find((slot) => slot.slot === loc.slot); const player = made ? valuedPlayers.find((item) => item.id === made.playerId) : undefined; const isCurrent = pickNo === currentPickNo; const ownerName = owner?.teamName || owner?.displayName || `Slot ${loc.slot}`; const playerName = boardPlayerName(player, made); const position = player?.position || made?.meta?.position || ''; const nflTeam = player?.team ?? made?.meta?.team ?? null; return <div key={pickNo} className={`cc-pick ${isCurrent ? 'cc-you' : ''} ${made?.isKeeper ? 'cc-keeper-pick' : ''} ${!made && !isCurrent ? 'cc-future' : ''}`} title={playerName ? `${player?.fullName || playerName} · ${ownerName}` : ownerName}><span className="cc-no">{pickNo}{made?.isKeeper ? <i className="cc-keeper-tag">K</i> : null}</span>{player ? <PlayerPhoto player={player} className="cc-avatar-xl" /> : <TeamLogo className="cc-team-logo-xl" src={owner?.avatar} label={ownerName} />}{playerName ? <span className="cc-pn">{playerName}</span> : null}<span className="cc-tm">{playerName ? [position, nflTeam].filter(Boolean).join(' · ') || ownerName : ownerName}</span>{isCurrent ? <span className="cc-mine">{owner?.isYou ? 'YOUR PICK' : 'ON THE CLOCK'}</span> : null}</div> })}</div><div className="cc-next">Viewing round {viewedRound} · {until === 0 ? 'You are on the clock' : `${until ?? '—'} picks until your next pick`}</div></footer>
 
     {queueOpen ? <Modal title="Manage draft queue" onClose={() => setQueueOpen(false)}><p className="cc-modal-note">Your order is saved for this draft. Queue actions do not submit picks to {provider.label}.</p>{activeQueue.length ? <ol className="cc-manage-queue">{activeQueue.map((id, index) => { const player = valuedPlayers.find((item) => item.id === id); if (!player) return null; return <li key={id}><span className="cc-n">{index + 1}</span><PlayerPhoto player={player} /><button type="button" className="cc-queue-select" onClick={() => { setSelectedPlayerId(id); setQueueOpen(false) }}>{player.fullName}<small>{player.position} · {player.team ?? 'FA'}</small></button><button type="button" disabled={index === 0} onClick={() => moveQueue(id, -1)} aria-label={`Move ${player.fullName} up`}>↑</button><button type="button" disabled={index === activeQueue.length - 1} onClick={() => moveQueue(id, 1)} aria-label={`Move ${player.fullName} down`}>↓</button><button type="button" className="cc-remove" onClick={() => toggleQueue(id)} aria-label={`Remove ${player.fullName}`}>×</button></li> })}</ol> : <div className="cc-empty-card">Your queue is empty.</div>}</Modal> : null}
-    {pendingPick && pendingPlayer ? <Modal title="Send this pick to Sleeper?" onClose={() => { if (!submittingPick) { setPendingPick(null); setPickError(null) } }}>
-      <p className="cc-modal-note">This submits the pick to your real Sleeper draft. It cannot be undone from here.</p>
-      <div className="cc-confirm-pick">
-        <PlayerPhoto player={pendingPlayer} className="cc-avatar-xl" />
-        <div>
-          <h3>{pendingPlayer.fullName}</h3>
-          <span>{pendingPlayer.position}{pendingPlayer.team ? ` · ${pendingPlayer.team}` : ''} · Round {currentLocation.round}, pick {pendingPick.pickNo}</span>
-        </div>
-      </div>
-      {pickError ? <div className="cc-room-note" role="alert">{pickError}</div> : null}
-      <div className="cc-confirm-actions">
-        <button type="button" onClick={() => { setPendingPick(null); setPickError(null) }} disabled={submittingPick}>Cancel</button>
-        <button type="button" className="cc-wide" onClick={() => { void confirmSitePick() }} disabled={submittingPick}>{submittingPick ? 'Sending…' : `Draft ${pendingPlayer.fullName}`}</button>
-      </div>
-    </Modal> : null}
-    {fullBoardOpen ? <Modal title="Full draft board" wide onClose={() => setFullBoardOpen(false)}><DraftBoard session={session} picks={picks} players={valuedPlayers} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} /></Modal> : null}
+    {fullBoardOpen ? <Modal title="Full draft board" wide layoutKey="full-board" onClose={() => setFullBoardOpen(false)}><DraftBoard session={session} picks={picks} players={valuedPlayers} currentPickNo={currentPickNo} onSelect={setSelectedPlayerId} /></Modal> : null}
     {rankingsOpen ? <RankingsSheet leagueName={session.name} leagueScoring={session.scoringType} receptionPremium={session.receptionPremium} directory={players} builtinSets={builtinSets} importedSets={importedSets} rankSettings={rankSettings} onClose={() => setRankingsOpen(false)} onChange={() => { setRankSettings(loadRankSettings()); setRankTick((tick) => tick + 1) }} /> : null}
     {keepersOpen ? <Modal title="Keepers" onClose={() => setKeepersOpen(false)}><KeeperPanel session={session} players={valuedPlayers} keepers={merged.keepers} manualKeepers={manualKeepers} conflicts={merged.conflicts} candidates={keeperCandidates} providerLabel={provider.label} syncing={keepersQuery.isFetching} costRoundPicks={keepersCostRoundPicks} onChange={setStoredKeepers} /></Modal> : null}
-    {gradesOpen ? <Modal title="Draft grades" report onClose={() => setGradesOpen(false)}><DraftGrades session={session} picks={picks} players={valuedPlayers} highlightedSlot={session.yourSlot} note={providerId === 'demo' && session.status === 'complete' ? 'Mock draft complete' : undefined} /></Modal> : null}
+    {gradesOpen ? <Modal title="Draft grades" report layoutKey="draft-grades" onClose={() => setGradesOpen(false)}><DraftGrades session={session} picks={picks} players={valuedPlayers} highlightedSlot={session.yourSlot} note={providerId === 'demo' && session.status === 'complete' ? 'Mock draft complete' : undefined} /></Modal> : null}
     {settingsOpen ? <SettingsSheet leagueName={session.name} providerLabel={provider.label} scoringType={session.scoringType} theme={theme} draftSounds={draftSounds} visibleColumns={visibleColumns} rankSettings={rankSettings} builtinSets={builtinSets} importedSets={importedSets} keeperCount={merged.keepers.length} teamCount={session.teams} allowedKeepers={session.keeperCount} keepersCostRoundPicks={keepersCostRoundPicks} mock={mockDraft} onClose={() => setSettingsOpen(false)} onThemeChange={updateTheme} onDraftSoundsChange={updateDraftSounds} onColumnsChange={updateColumns} onKeepersCostChange={setKeepersCostRoundPicks} onOpenRankings={() => { setSettingsOpen(false); setRankingsOpen(true) }} onOpenKeepers={() => { setSettingsOpen(false); setKeepersOpen(true) }} onMockChange={updateMockDraft} onStartMock={startMockDraft} onMockLeague={providerId === 'demo' ? undefined : startLeagueMock} onClearMockLeague={mockLeagueSeed ? clearLeagueMock : undefined} mockLeagueName={mockLeagueSeed?.template.name ?? null} /> : null}
   </div>
 }
@@ -746,6 +764,30 @@ function boardPlayerName(player?: Player, pick?: DraftPick) {
   return `${first} ${last}`.trim()
 }
 
-function Modal({ title, wide = false, report = false, onClose, children }: { title: string; wide?: boolean; report?: boolean; onClose: () => void; children: React.ReactNode }) {
-  return <div className="cc-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`cc-modal ${wide ? 'cc-modal-wide' : ''} ${report ? 'cc-modal-report' : ''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button></header><div className="cc-modal-body">{children}</div></section></div>
+/**
+ * `layoutKey` opts a modal into being dragged and resized, and into
+ * remembering where it was left. Modals without one stay centred: a short
+ * confirmation has nothing to gain from being moved.
+ */
+function Modal({ title, wide = false, report = false, layoutKey, onClose, children }: { title: string; wide?: boolean; report?: boolean; layoutKey?: string; onClose: () => void; children: React.ReactNode }) {
+  const { panelRef, style, dragHandleProps, resizeHandleProps, reset, moved } = usePanelLayout(layoutKey ?? '')
+  const movable = Boolean(layoutKey)
+  return <div className="cc-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section
+      ref={panelRef as React.Ref<HTMLElement>}
+      className={`cc-modal ${wide ? 'cc-modal-wide' : ''} ${report ? 'cc-modal-report' : ''} ${moved ? 'cc-panel-moved' : ''}`}
+      style={movable ? style : undefined}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      {movable ? <PanelResizeHandles resizeHandleProps={resizeHandleProps} /> : null}
+      <header {...(movable ? { className: 'cc-drag-handle', title: 'Drag to move · double-click to reset', ...dragHandleProps } : {})}>
+        <h2>{title}</h2>
+        {movable && moved ? <button type="button" className="cc-panel-reset" onClick={reset} aria-label={`Reset ${title} size and position`}>Reset</button> : null}
+        <button type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button>
+      </header>
+      <div className="cc-modal-body">{children}</div>
+    </section>
+  </div>
 }

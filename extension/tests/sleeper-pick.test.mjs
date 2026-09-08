@@ -131,7 +131,39 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
   await win.fetch('https://sleeper.com/graphql', { headers: { authorization: 'tok-long-enough' } })
   deliver({ ...pickCommand(), source: 'somebody-else' })
   await settle()
-  assert.equal(posted.length, 0)
+  assert.equal(posted.filter((data) => data.type === 'DRAFT_PICK_RESULT').length, 0)
+}
+
+// The badge is told when picking becomes possible -- as a boolean, never the
+// token that made it possible.
+{
+  const { win, posted, deliver } = boot()
+  assert.equal(posted.length, 0, 'nothing is announced before a token is seen')
+
+  deliver({ source: 'draft-assistant-sleeper-cmd', type: 'PICK_STATUS_QUERY' })
+  await settle()
+  assert.deepEqual(
+    posted.map((data) => [data.type, data.ready]),
+    [['PICK_STATUS', false]],
+    'a cold page reports not-ready rather than staying silent',
+  )
+
+  await win.fetch('https://sleeper.com/graphql', { headers: { authorization: 'secret-token-value' } })
+  await settle()
+  // Spread first: the script builds this object with the vm context's own
+  // Object.prototype, which a strict deep-equal counts as a different shape.
+  assert.deepEqual({ ...posted.at(-1) }, {
+    source: 'draft-assistant-sleeper-page',
+    type: 'PICK_STATUS',
+    ready: true,
+  })
+  assert.ok(!JSON.stringify(posted).includes('secret-token-value'), 'status must not carry the token')
+
+  // Observing further requests must not re-announce on every call.
+  const before = posted.length
+  await win.fetch('https://sleeper.com/graphql', { headers: { authorization: 'secret-token-value' } })
+  await settle()
+  assert.equal(posted.length, before)
 }
 
 console.log('sleeper-pick.test.mjs ok')

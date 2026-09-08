@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCsv, toRow } from './fantasysharks-projections.mjs'
+import { boardUrl, parseCsv, parseSegments, pickSeasonSegment, seasonSegmentGuess, toRow } from './fantasysharks-projections.mjs'
 
 const qbCsv = `Rank,Player ID,Player Name,Team,Position,Att,Comp,Pass Yds,Pass TDs,Int,Rush,Rush Yds,Rush TDs,Fum Lost,Pts
 1,13589,"Allen, Josh",BUF,QB,450.1,303.8,3601.0,31.1,8.5,106.9,514.0,12.8,3.0,422.2
@@ -70,5 +70,25 @@ describe('parseCsv', () => {
 describe('toRow', () => {
   it('drops a row with no volume', () => {
     expect(toRow({ 'Player Name': 'Nobody', Team: 'CHI', Position: 'RB' }, 'RB')).toBeNull()
+  })
+})
+
+describe('season segment', () => {
+  it('pins the CSV to the season Segment, not the default Week 1 board', () => {
+    expect(boardUrl({ positionId: 2 }, 874)).toBe('https://www.fantasysharks.com/apps/bert/forecasts/projections.php?csv=1&Position=2&Segment=874')
+    expect(seasonSegmentGuess(2026)).toBe(874)
+    expect(seasonSegmentGuess(2027)).toBe(906)
+  })
+
+  it('reads the Period dropdown and prefers NFL Season over Rest of Year', () => {
+    const html = `<select name="Segment"><option value="874">2026 NFL Season</option><option value="877">2026 Rest of Year</option><option value="883" selected>&nbsp;&nbsp;Week 1</option></select>`
+    const options = parseSegments(html)
+    expect(options).toEqual([
+      { id: 874, label: '2026 NFL Season' },
+      { id: 877, label: '2026 Rest of Year' },
+      { id: 883, label: 'Week 1' },
+    ])
+    expect(pickSeasonSegment(options, 2026)).toBe(874)
+    expect(pickSeasonSegment(options, 2025)).toBeNull()
   })
 })

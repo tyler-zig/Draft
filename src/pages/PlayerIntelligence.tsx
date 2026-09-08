@@ -209,7 +209,7 @@ export function PlayerIntelligence() {
   const receivingValue = projection?.targets ?? projection?.receptions
   const schedule = historicalQuery.data ? playerScheduleFromHistorical(historicalQuery.data, selected, scoringType) : null
   const byeWeek = byeWeekFromSchedule(schedule?.weeks) ?? selected.bye
-  const selectedHistory = lookupMarketHistory(historyCatalogQuery.data, selected)
+  const selectedHistory = lookupMarketHistory(historyCatalogQuery.data, newsPlayer ?? selected)
   const trend = selectedHistory.points
   const livePoint = (player: Player) => player.liveAdp != null ? { at: Date.now(), value: player.liveAdp } : null
   const formatTrend = (delta: number | null) => delta == null ? '—' : `${delta > 0 ? '↑ ' : delta < 0 ? '↓ ' : ''}${Math.abs(delta).toFixed(1)}`

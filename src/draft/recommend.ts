@@ -1,10 +1,13 @@
 import type { DraftPick, LeagueFormat, Player, SlotCounts } from '../providers/types'
+import { availabilityTerms } from './availability'
+import { positionConsistencyMedians } from './consistency'
 import { choppedNeedScale, choppedTerms } from './chopped'
-import { normalizeName, normalizePos, normalizeTeam } from '../rankings/normalize'
+import { normalizeTeam } from '../rankings/normalize'
 import { scoreByeFit } from './byeWeeks'
 import { fillRoster, needForPosition } from './rosterNeeds'
 import { isSevereInjury } from './injuryStatus'
 import { marketBaseline } from './playerContext'
+import { isUnsignedFreeAgent } from './freeAgents'
 import { draftSpread, survivalAdjustment, survivalProbability, waitSurvivalAdjustment } from './survival'
 
 export interface ScoreTerm {
@@ -37,8 +40,42 @@ const UNRANKED = 9999
  * remaining picks are all needed for starters, one always wins. Deliberately
  * outside the tuned range above: it settles the question rather than joining
  * the argument.
+ *
+ * Sized to the ceiling rather than picked for effect. A bench player's score
+ * cannot realistically pass ~550 -- the base caps at `450 - rank` on the rank
+ * fallback or `vorp * 3` (~405 on a real board), and the bonuses below add at
+ * most another hundred or so. Anything past that separates the two groups
+ * completely, and since this adds the *same* constant to every eligible
+ * player, ordering within them is untouched either way: a larger number buys
+ * no extra certainty, it only swamps the score breakdown it appears in.
  */
-const FORCED_STARTER = 1000
+const FORCED_STARTER = 600
+
+/**
+ * Positions the override does not apply to, and the bonus they get instead.
+ *
+ * Kicker and defense are the two most streamable slots in fantasy -- there is
+ * always one on waivers, and a roster spot can be cleared for it after the
+ * draft. Treating an empty K slot as exactly as binding as an empty QB slot
+ * put a kicker above an elite back on the board, which is not a trade any
+ * drafter would make. They get a bonus big enough to beat ordinary bench
+ * fodder and lose to a genuinely better player, which is the real choice.
+ */
+const STREAMABLE_STARTERS = new Set(['K', 'DEF'])
+const STREAMABLE_STARTER = 120
+
+/**
+ * Picks left over which the streamable exemption dissolves.
+ *
+ * Streaming a kicker costs a bench spot and a waiver claim, which is a fine
+ * trade with rounds still to come and a bad one with nothing left to spend.
+ * So the discount is not a fixed opinion about kickers -- it is an opinion
+ * about having somewhere better to put the pick, and it fades as that stops
+ * being true. On the final pick it reaches `FORCED_STARTER` exactly: there is
+ * no longer anything to trade the slot for, so the exemption has nothing left
+ * to justify it.
+ */
+const STREAMABLE_LAST_ROUNDS = 2
 
 export function availablePlayers(
   players: Player[],
@@ -74,7 +111,7 @@ interface ScoreCurve {
  */
 function buildScoreCurve(players: Player[]): ScoreCurve | null {
   const anchors = players
-    .filter((p) => p.vorp != null && p.searchRank > 0 && p.searchRank < UNRANKED)
+    .filter((p) => p.vorp != null && p.searchRank > 0 && p.searchRank < UNRANKED && !isUnsignedFreeAgent(p))
     .map((p) => ({ rank: p.searchRank, score: p.vorp! * 3 }))
     .sort((a, b) => a.rank - b.rank)
   // Any anchor at all is enough to keep one scale. A curve built from two
@@ -183,10 +220,14 @@ export function recommendPicks(options: {
       ? yourFollowingPickNo
       : null
   const queued = new Set(queuedIds)
-  const pool = availablePlayers(players, picks)
+  const pool = availablePlayers(players, picks).filter((player) => !isUnsignedFreeAgent(player))
   // Built from the whole pool, not just the available one, so the curve does
   // not shift under you as the draft empties the board.
   const scoreCurve = buildScoreCurve(players)
+  // Built from the whole pool for the same reason the score curve is: a
+  // positional median that shifted as the board emptied would re-rate players
+  // who had not changed. Only chopped reads it, so only chopped pays for it.
+  const consistencyMedians = chopped ? positionConsistencyMedians(players) : undefined
   const playerById = new Map(players.map((p) => [p.id, p]))
 
   const yourPicks = picks.filter((p) => p.draftSlot === yourSlot)
@@ -266,6 +307,11 @@ export function recommendPicks(options: {
    * this line need is a tiebreak; at it, it is the whole question.
    */
   const mustFillStarters = openStarters >= picksLeft
+  /** 0 while there are picks to spare, 1 on the last one. */
+  const streamableUrgency = Math.max(0, Math.min(1,
+    (STREAMABLE_LAST_ROUNDS + 1 - picksLeft) / STREAMABLE_LAST_ROUNDS))
+  const streamableBonus = STREAMABLE_STARTER
+    + (FORCED_STARTER - STREAMABLE_STARTER) * streamableUrgency
 
   const byeRoster = filled.map((slot) => (
     slot.player
@@ -284,16 +330,6 @@ export function recommendPicks(options: {
   // positive tilt, not a rule.
   const yourQb = yourPlayers.find((p) => p.position === 'QB') ?? null
   const yourPassCatchers = yourPlayers.filter((p) => p.position === 'WR' || p.position === 'TE')
-
-  // True unsigned duplicates only: a blank Sleeper team is normal in August
-  // and is not a reason to hide a player. A free agent who shares a name and
-  // position with someone who has a team is the one that was stealing ranks.
-  const rosteredNamesake = new Set<string>()
-  for (const player of pool) {
-    if (!player.team || player.position === 'DEF') continue
-    const key = `${normalizeName(player.fullName)}|${normalizePos(player.position) ?? ''}`
-    if (key !== '|') rosteredNamesake.add(key)
-  }
 
   // Starters drafted by anyone but you. Your own starters already drive the
   // handcuff check above, so this set is what "his starter is already gone"
@@ -322,15 +358,36 @@ export function recommendPicks(options: {
       breakdown.push({ label, delta })
     }
 
+    // Availability and age come first, and are the only terms that discount
+    // the projection rather than adding a preference to it. A season
+    // projection is computed over 17 games; these two say how much of that
+    // season the player is likely to be there for, and how much of his peak
+    // he still has. Everything below prices a player against the field, so it
+    // has to price the value he can actually deliver -- and because both
+    // scale with his own base value, they stay comparable across rounds.
+    for (const term of availabilityTerms({
+      position: player.position,
+      age: player.age,
+      availability: player.availability,
+      baseValue: score,
+      chopped,
+    })) {
+      add(term.label, term.delta)
+      if (term.reason) reasons.push(term.reason)
+    }
+
     // Waiting: price who will still be there at your seat. On the clock:
     // take someone who will be gone before you pick again.
     let survival: number | null = null
     if (survivalAt != null && baseline) {
       const spread = draftSpread(player, baseline.value)
       if (spread != null) {
-        survival = survivalProbability(baseline.value, spread, survivalAt)
+        survival = survivalProbability(baseline.value, spread, survivalAt, currentPickNo)
+        // Risk-adjusted, not raw: what you can capture at a later pick is the
+        // value this player is actually likely to deliver, so discounting the
+        // 17-game projection first keeps the wait penalty proportional to it.
         const wait = waiting
-          ? waitSurvivalAdjustment(survival, baseScore(player, scoreCurve))
+          ? waitSurvivalAdjustment(survival, score)
           : survivalAdjustment(survival)
         add(wait.reason ?? (waiting ? 'May not last until your pick' : 'Unlikely to last'), wait.delta)
         if (wait.reason) reasons.push(wait.reason)
@@ -352,8 +409,18 @@ export function recommendPicks(options: {
       reasons.push(need.label)
     }
     if (mustFillStarters && need.kind !== 'bench') {
-      add('Last chance to fill a starter', FORCED_STARTER)
-      reasons.unshift('Last chance to fill a starter')
+      // Streamable only while the exemption still has a reason: on the last
+      // pick the bonus has ramped to `FORCED_STARTER`, so it is billed as
+      // what it has become rather than what it started as.
+      const streamable = STREAMABLE_STARTERS.has(player.position) && streamableUrgency < 1
+      add(
+        streamable ? 'Last starter slot (streamable)' : 'Last chance to fill a starter',
+        streamable ? streamableBonus : FORCED_STARTER,
+      )
+      // Pushed, not unshifted. This fires for every eligible player at once,
+      // so leading with it made the headline identical across the whole board
+      // at exactly the moment a drafter wants to know what separates them.
+      reasons.push(streamable ? 'Last starter slot (streamable)' : 'Last chance to fill a starter')
     }
 
     if (baseline) {
@@ -468,21 +535,15 @@ export function recommendPicks(options: {
       reasons.push(`Standalone value (${player.position}${player.depthChartOrder})`)
     }
 
-    if (!player.team && player.position !== 'DEF') {
-      const namesake = `${normalizeName(player.fullName)}|${normalizePos(player.position) ?? ''}`
-      if (rosteredNamesake.has(namesake)) {
-        add('Free agent namesake', -400)
-        reasons.push('Free agent')
-      }
-    }
-
     if (isSevereInjury(player.injuryStatus)) {
       add(player.injuryStatus, -40)
       reasons.push(player.injuryStatus)
     }
 
     if (chopped) {
-      for (const choppedTerm of choppedTerms({ player, horizonPickNo, teams, yourPlayers })) {
+      for (const choppedTerm of choppedTerms({
+        player, horizonPickNo, teams, yourPlayers, baseValue: score, consistencyMedians,
+      })) {
         add(choppedTerm.label, choppedTerm.delta)
         if (choppedTerm.reason) reasons.push(choppedTerm.reason)
       }

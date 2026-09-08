@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Player } from '../providers/types'
-import { attachHistoryRange, clearRankingHistoryCache, getPlayerIntelligence, getPlayerMarketHistory, getPlayerNews, getRankingHistoryCatalog, lookupMarketHistory, marketHistoryMode, marketHistoryTrend, parseAthleteNews, playerIntelligenceQueryKey, rangeFromHistory, withPayloadAdpWindows } from './playerIntelligence'
+import { clearHistoricalArtifactCache } from './playerHistorical'
+import { attachHistoryRange, clearRankingHistoryCache, getPlayerIntelligence, getPlayerMarketHistory, getPlayerNews, getRankingHistoryCatalog, lookupMarketHistory, marketHistoryMode, marketHistoryTrend, parseAthleteNews, playerIntelligenceQueryKey, rangeFromHistory, withPayloadAdpWindows, withResolvedEspnId } from './playerIntelligence'
 
 const player: Player = { id: 'draft-id', espnId: '42', firstName: 'Real', lastName: 'Player', fullName: 'Real Player', position: 'RB', team: 'CHI', searchRank: 1, injuryStatus: null, number: null, yearsExp: null, bye: null }
 
-afterEach(() => { clearRankingHistoryCache(); vi.unstubAllGlobals() })
+afterEach(() => { clearRankingHistoryCache(); clearHistoricalArtifactCache(); vi.unstubAllGlobals() })
 
 describe('player market history', () => {
   it('resolves a player by stable id and retains only stored observations', async () => {
@@ -35,6 +36,19 @@ describe('player market history', () => {
     expect(marketHistoryTrend(history.points, { at: 400, value: 9 })).toBe(2)
     expect(rangeFromHistory(history.points)).toEqual({ low: 4, high: 11 })
     expect(attachHistoryRange([{ ...player, rankLow: null, rankHigh: null }], catalog)[0]).toMatchObject({ rankLow: 4, rankHigh: 11 })
+  })
+
+  it('falls back to normalized name when the board player has no ESPN id', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      schemaVersion: 1, generatedAt: 300, series: 'Collected median', players: [
+        { espnId: '4429795', name: 'Jahmyr Gibbs', position: 'RB', team: 'DET', points: [{ at: 100, rank: 2, adp: 2, liveAdp: 1.4, low: 1, high: 3, sourceCount: 4 }, { at: 200, rank: 1, adp: 1.8, liveAdp: 1.2, low: 1, high: 3, sourceCount: 5 }] },
+      ],
+    }), { headers: { 'content-type': 'application/json' } })))
+    const catalog = await getRankingHistoryCatalog()
+    const history = lookupMarketHistory(catalog, { ...player, espnId: undefined, fullName: 'Jahmyr Gibbs', team: 'DET' })
+    expect(history.points).toHaveLength(2)
+    expect(history.points[0]?.liveAdp).toBe(1.4)
+    expect(marketHistoryMode(history.points)).toBe('liveAdp')
   })
 
   it('turns FantasyPros last-1 and last-7 windows into a live-ADP series', () => {
@@ -132,6 +146,43 @@ describe('player news', () => {
     const data = await getPlayerIntelligence({ ...player, espnId: undefined })
     expect(data.news).toEqual([])
     expect(data.newsMessage).toBe('This player is not linked to an ESPN profile.')
+  })
+
+  it('fills a blank ESPN id from nflverse before news and the ADP graph give up', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('intelligence/latest.json') || url.includes('intelligence/players/')) {
+        return new Response(JSON.stringify({
+          schemaVersion: 1, generatedAt: 'now', attribution: 'Data: nflverse', methodology: {},
+          players: [{ ids: { gsis: 'g', espn: '4429795', sleeper: '9224', pfr: null }, name: 'Jahmyr Gibbs', team: 'DET', position: 'RB', seasons: [{ season: 2025 }] }],
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (url.includes('rankings/history.json')) {
+        return new Response(JSON.stringify({
+          schemaVersion: 1, generatedAt: 300, series: 'Collected median', players: [
+            { espnId: '4429795', name: 'Jahmyr Gibbs', position: 'RB', team: 'DET', points: [{ at: 100, rank: 2, adp: 2, liveAdp: 1.8, low: 1, high: 3, sourceCount: 4 }, { at: 200, rank: 1, adp: 1.6, liveAdp: 1.2, low: 1, high: 3, sourceCount: 5 }] },
+          ],
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (url.includes('/athletes/4429795/overview')) {
+        return new Response(JSON.stringify({
+          rotowire: { headline: 'Cleared for 11-on-11 work.', story: '', published: '2026-08-08T19:36:54.000Z' },
+          news: [],
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (url.includes('/athletes/4429795/stats')) {
+        return new Response(JSON.stringify({ categories: [] }), { headers: { 'content-type': 'application/json' } })
+      }
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const unlinked = { ...player, espnId: undefined, sleeperId: '9224', fullName: 'Jahmyr Gibbs', firstName: 'Jahmyr', lastName: 'Gibbs', team: 'DET' }
+    expect(withResolvedEspnId(unlinked, { espnId: '4429795' }).espnId).toBe('4429795')
+    const data = await getPlayerIntelligence(unlinked)
+    expect(data.news).toEqual([expect.objectContaining({ source: 'RotoWire', headline: 'Cleared for 11-on-11 work.' })])
+    expect(data.newsMessage).toBeNull()
+    expect(data.marketHistory.points.map((point) => point.liveAdp)).toEqual([1.8, 1.2])
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/athletes/4429795/overview'))).toBe(true)
   })
 
   it('keys draft-room and player-intelligence queries on ESPN id when present', () => {
